@@ -2,11 +2,43 @@ export type StudyTab = 'home' | 'quiz' | 'recite' | 'wrong';
 
 export type QuestionType = '判断' | '单选' | '多选' | '填空';
 
+export type BankSource = '本地 Excel' | '微信 Excel';
+
+export type QuestionOption = {
+  key: string;
+  text: string;
+};
+
 export type QuestionBank = {
   id: string;
   name: string;
-  source: '本地 Excel' | '微信 Excel';
+  source: BankSource;
   questionCount: number;
   updatedAt: string;
   questionTypes: QuestionType[];
+  fileName?: string | null;
+};
+
+export type ImportQuestionRow = {
+  id: string;
+  sheetName: string;
+  rowNumber: number;
+  type: QuestionType | null;
+  stem: string;
+  options: QuestionOption[];
+  answers: string[];
+  explanation: string;
+  tags: string[];
+  errors: string[];
+  warnings: string[];
+};
+
+export type ImportPreview = {
+  bankName: string;
+  source: BankSource;
+  fileName: string;
+  sheetNames: string[];
+  standardColumns: string[];
+  workbookWarnings: string[];
+  rows: ImportQuestionRow[];
 };

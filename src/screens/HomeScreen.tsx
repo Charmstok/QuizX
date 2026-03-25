@@ -9,13 +9,28 @@ import type { QuestionBank, StudyTab } from '../types';
 type HomeScreenProps = {
   banks: QuestionBank[];
   totalQuestions: number;
+  isImporting: boolean;
   onOpenTab: (tab: StudyTab) => void;
+  onImportLocal: () => void;
 };
 
-export function HomeScreen({ banks, totalQuestions, onOpenTab }: HomeScreenProps) {
+export function HomeScreen({
+  banks,
+  totalQuestions,
+  isImporting,
+  onOpenTab,
+  onImportLocal,
+}: HomeScreenProps) {
   const handleImport = (source: 'local' | 'wechat') => {
-    const label = source === 'local' ? '本地 Excel 导入' : '微信 Excel 导入';
-    Alert.alert(label, '当前版本只做界面演示，下一步会接入系统文件选择器和 Excel 解析。');
+    if (source === 'local') {
+      onImportLocal();
+      return;
+    }
+
+    Alert.alert(
+      '微信 Excel 导入',
+      '这一轮先完成本地 Excel -> 预览 -> SQLite 的完整链路，微信导入后续再接。',
+    );
   };
 
   return (
@@ -23,26 +38,36 @@ export function HomeScreen({ banks, totalQuestions, onOpenTab }: HomeScreenProps
       <SectionTitle
         eyebrow="QuizX MVP"
         title="把题库装进口袋里"
-        subtitle="当前版本先完成最小可运行界面，后续逐步接入 Excel 导入、SQLite 存储和真实答题流程。题目类型先固定为判断、单选、多选、填空。"
+        subtitle="当前版本已经开始接真实数据流：本地 Excel 走系统文件选择器，先标准化预览，再写入 SQLite。题型先固定为判断、单选、多选、填空。"
       />
 
       <View style={styles.heroCard}>
         <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>先打通导入、浏览和模式入口</Text>
+          <Text style={styles.heroTitle}>先导入，再落 SQLite</Text>
           <Text style={styles.heroDescription}>
-            这一版专注于移动端主界面结构，先把题库总览、学习模式和后续入口摆稳。
+            系统会把 Excel 行数据统一映射成标准题目结构，先做导入预览，再确认写入本地数据库。
           </Text>
         </View>
         <View style={styles.heroActions}>
           <Pressable
             onPress={() => handleImport('local')}
-            style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}
+            disabled={isImporting}
+            style={({ pressed }) => [
+              styles.primaryAction,
+              (pressed || isImporting) && styles.pressed,
+            ]}
           >
-            <Text style={styles.primaryActionText}>导入本地 Excel</Text>
+            <Text style={styles.primaryActionText}>
+              {isImporting ? '解析文件中...' : '导入本地 Excel'}
+            </Text>
           </Pressable>
           <Pressable
             onPress={() => handleImport('wechat')}
-            style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}
+            disabled={isImporting}
+            style={({ pressed }) => [
+              styles.secondaryAction,
+              (pressed || isImporting) && styles.pressed,
+            ]}
           >
             <Text style={styles.secondaryActionText}>导入微信 Excel</Text>
           </Pressable>
@@ -50,12 +75,8 @@ export function HomeScreen({ banks, totalQuestions, onOpenTab }: HomeScreenProps
       </View>
 
       <View style={styles.statsRow}>
-        <StatCard label="题库数量" value={String(banks.length)} hint="当前使用占位数据演示" />
-        <StatCard
-          label="题目总数"
-          value={String(totalQuestions)}
-          hint="后续将从 SQLite 实时读取"
-        />
+        <StatCard label="题库数量" value={String(banks.length)} hint="题库摘要从 SQLite 读取" />
+        <StatCard label="题目总数" value={String(totalQuestions)} hint="导入成功后会实时更新" />
       </View>
 
       <View style={styles.sectionGap}>
@@ -88,36 +109,54 @@ export function HomeScreen({ banks, totalQuestions, onOpenTab }: HomeScreenProps
       <View style={styles.sectionGap}>
         <SectionTitle
           title="题库概览"
-          subtitle="这部分后续会改成真实数据库内容，当前只展示题库来源、题量和支持题型。"
+          subtitle="这里已经从 SQLite 读取题库摘要。如果数据库还是空的，先通过上面的本地导入走一遍。"
         />
       </View>
       <View style={styles.bankList}>
-        {banks.map((bank) => (
-          <View key={bank.id} style={styles.bankCard}>
-            <View style={styles.bankHeader}>
-              <Text style={styles.bankName}>{bank.name}</Text>
-              <Text style={styles.bankSource}>{bank.source}</Text>
+        {banks.length > 0 ? (
+          banks.map((bank) => (
+            <View key={bank.id} style={styles.bankCard}>
+              <View style={styles.bankHeader}>
+                <Text style={styles.bankName}>{bank.name}</Text>
+                <Text style={styles.bankSource}>{bank.source}</Text>
+              </View>
+              <Text style={styles.bankMeta}>
+                {bank.questionCount} 题 · 最近更新 {bank.updatedAt}
+              </Text>
+              {bank.fileName ? <Text style={styles.bankFile}>来源文件 {bank.fileName}</Text> : null}
+              <View style={styles.tagRow}>
+                {bank.questionTypes.map((questionType) => (
+                  <View key={questionType} style={styles.tag}>
+                    <Text style={styles.tagText}>{questionType}</Text>
+                  </View>
+                ))}
+              </View>
             </View>
-            <Text style={styles.bankMeta}>
-              {bank.questionCount} 题 · 最近更新 {bank.updatedAt}
+          ))
+        ) : (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>SQLite 已初始化，但还没有题库</Text>
+            <Text style={styles.emptyText}>
+              先从系统文件选择器选一个 Excel，进入预览页确认格式后再导入。
             </Text>
-            <View style={styles.tagRow}>
-              {bank.questionTypes.map((questionType) => (
-                <View key={questionType} style={styles.tag}>
-                  <Text style={styles.tagText}>{questionType}</Text>
-                </View>
-              ))}
-            </View>
           </View>
-        ))}
+        )}
       </View>
 
       <View style={styles.tipCard}>
+        <Text style={styles.tipTitle}>当前标准导入列</Text>
+        <Text style={styles.tipText}>1. 题库名称</Text>
+        <Text style={styles.tipText}>2. 题型</Text>
+        <Text style={styles.tipText}>3. 题目</Text>
+        <Text style={styles.tipText}>4. 选项A ~ 选项D</Text>
+        <Text style={styles.tipText}>5. 答案 / 解析 / 标签</Text>
+      </View>
+
+      <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. SQLite 持久化题库与答题记录</Text>
-        <Text style={styles.tipText}>2. 文件选择器读取本地 Excel</Text>
-        <Text style={styles.tipText}>3. 导入预览页统一题目结构</Text>
-        <Text style={styles.tipText}>4. 最小答题闭环与错题记录</Text>
+        <Text style={styles.tipText}>1. 把导入后的题目接进真实答题流程</Text>
+        <Text style={styles.tipText}>2. 再补背诵模式和错题本数据闭环</Text>
+        <Text style={styles.tipText}>3. 后续再补微信来源和批量导入体验</Text>
       </View>
     </ScrollView>
   );
@@ -223,6 +262,10 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 14,
   },
+  bankFile: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
   tagRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -239,7 +282,31 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  emptyCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  emptyTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  emptyText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 22,
+  },
   tipCard: {
+    backgroundColor: colors.brandSoft,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    gap: spacing.xs,
+  },
+  planCard: {
     backgroundColor: colors.tip,
     borderRadius: radius.lg,
     padding: spacing.lg,

@@ -1,0 +1,225 @@
+import {
+  getImportPreviewStats,
+  isImportRowValid,
+} from '../importer/localExcelImport';
+import type { ImportPreview, QuestionBank, QuestionType } from '../types';
+import type { SQLiteDatabase } from '../vendor/expoSqlite';
+
+const DATABASE_VERSION = 1;
+const IMPORT_TEMPLATE_VERSION = 1;
+
+type QuestionBankRow = {
+  id: string;
+  name: string;
+  source: QuestionBank['source'];
+  file_name: string | null;
+  question_count: number;
+  question_types_json: string;
+  updated_at: string;
+};
+
+export async function migrateDbIfNeeded(db: SQLiteDatabase) {
+  await db.execAsync(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+  `);
+
+  const result = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const currentVersion = result?.user_version ?? 0;
+
+  if (currentVersion >= DATABASE_VERSION) {
+    return;
+  }
+
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS question_banks (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      file_name TEXT,
+      question_count INTEGER NOT NULL DEFAULT 0,
+      question_types_json TEXT NOT NULL DEFAULT '[]',
+      import_template_version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS questions (
+      id TEXT PRIMARY KEY NOT NULL,
+      bank_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      stem TEXT NOT NULL,
+      options_json TEXT NOT NULL DEFAULT '[]',
+      answers_json TEXT NOT NULL DEFAULT '[]',
+      explanation TEXT NOT NULL DEFAULT '',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source_sheet TEXT NOT NULL DEFAULT '',
+      source_row INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_question_banks_updated_at
+      ON question_banks(updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_id
+      ON questions(bank_id);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_sort
+      ON questions(bank_id, sort_order);
+
+    PRAGMA user_version = ${DATABASE_VERSION};
+  `);
+}
+
+export async function listQuestionBanks(db: SQLiteDatabase): Promise<QuestionBank[]> {
+  const rows = await db.getAllAsync<QuestionBankRow>(`
+    SELECT
+      id,
+      name,
+      source,
+      file_name,
+      question_count,
+      question_types_json,
+      updated_at
+    FROM question_banks
+    ORDER BY datetime(updated_at) DESC, name ASC
+  `);
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    source: row.source,
+    fileName: row.file_name,
+    questionCount: row.question_count,
+    questionTypes: safeParseQuestionTypes(row.question_types_json),
+    updatedAt: row.updated_at.slice(0, 10),
+  }));
+}
+
+export async function saveImportPreview(
+  db: SQLiteDatabase,
+  preview: ImportPreview,
+): Promise<QuestionBank> {
+  const validRows = preview.rows.filter(isImportRowValid);
+
+  if (validRows.length === 0) {
+    throw new Error('当前预览中没有可导入的题目。');
+  }
+
+  const stats = getImportPreviewStats(preview);
+  const now = new Date().toISOString();
+  const bankId = createId('bank');
+  const questionTypesJson = JSON.stringify(stats.questionTypes);
+
+  await db.withExclusiveTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        INSERT INTO question_banks (
+          id,
+          name,
+          source,
+          file_name,
+          question_count,
+          question_types_json,
+          import_template_version,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      bankId,
+      preview.bankName,
+      preview.source,
+      preview.fileName,
+      validRows.length,
+      questionTypesJson,
+      IMPORT_TEMPLATE_VERSION,
+      now,
+      now,
+    );
+
+    const statement = await db.prepareAsync(`
+      INSERT INTO questions (
+        id,
+        bank_id,
+        type,
+        stem,
+        options_json,
+        answers_json,
+        explanation,
+        tags_json,
+        source_sheet,
+        source_row,
+        sort_order,
+        created_at,
+        updated_at
+      ) VALUES (
+        $id,
+        $bankId,
+        $type,
+        $stem,
+        $optionsJson,
+        $answersJson,
+        $explanation,
+        $tagsJson,
+        $sourceSheet,
+        $sourceRow,
+        $sortOrder,
+        $createdAt,
+        $updatedAt
+      )
+    `);
+
+    try {
+      for (const [index, row] of validRows.entries()) {
+        await statement.executeAsync({
+          $id: createId('question'),
+          $bankId: bankId,
+          $type: row.type,
+          $stem: row.stem,
+          $optionsJson: JSON.stringify(row.options),
+          $answersJson: JSON.stringify(row.answers),
+          $explanation: row.explanation,
+          $tagsJson: JSON.stringify(row.tags),
+          $sourceSheet: row.sheetName,
+          $sourceRow: row.rowNumber,
+          $sortOrder: index + 1,
+          $createdAt: now,
+          $updatedAt: now,
+        });
+      }
+    } finally {
+      await statement.finalizeAsync();
+    }
+  });
+
+  return {
+    id: bankId,
+    name: preview.bankName,
+    source: preview.source,
+    fileName: preview.fileName,
+    questionCount: validRows.length,
+    questionTypes: stats.questionTypes,
+    updatedAt: now.slice(0, 10),
+  };
+}
+
+function safeParseQuestionTypes(value: string): QuestionType[] {
+  try {
+    const parsed = JSON.parse(value) as QuestionType[];
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function createId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
