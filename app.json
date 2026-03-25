@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "QuizX",
+    "slug": "quizx",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.quizx.app"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.quizx.app"
+    }
+  }
+}
+
