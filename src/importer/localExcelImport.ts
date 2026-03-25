@@ -1,8 +1,8 @@
 import {
   EXCEL_MIME_TYPES,
-  HEADER_ALIASES,
   OPTION_KEYS,
   STANDARD_IMPORT_COLUMNS,
+  STANDARD_IMPORT_SHEETS,
 } from './importTemplate';
 import type {
   ImportPreview,
@@ -15,15 +15,12 @@ import { File } from '../vendor/expoFileSystem';
 import { read, utils } from '../vendor/xlsx';
 import type { WorkBook } from '../vendor/xlsx';
 
-type CanonicalField = keyof typeof HEADER_ALIASES;
 type RawSheetRow = Record<string, unknown>;
+type StandardField = (typeof STANDARD_IMPORT_COLUMNS)[number];
 
-const HEADER_ALIAS_SETS = Object.fromEntries(
-  Object.entries(HEADER_ALIASES).map(([key, values]) => [
-    key,
-    new Set(values.map((value) => normalizeHeader(value))),
-  ]),
-) as Record<CanonicalField, Set<string>>;
+const STANDARD_FIELD_SET = new Set(
+  STANDARD_IMPORT_COLUMNS.map((value) => normalizeHeader(value)),
+);
 
 const QUESTION_TYPE_MAP: Record<string, QuestionType> = {
   判断: '判断',
@@ -81,7 +78,6 @@ export function buildImportPreview({
 }): ImportPreview {
   const rows: ImportQuestionRow[] = [];
   const nonEmptySheets: string[] = [];
-  const bankNames = new Set<string>();
   const workbookWarnings: string[] = [];
 
   for (const sheetName of workbook.SheetNames) {
@@ -98,6 +94,15 @@ export function buildImportPreview({
 
     nonEmptySheets.push(sheetName);
 
+    const headers = Object.keys(sheetRows[0] ?? {});
+    const missingHeaders = getMissingHeaders(headers);
+
+    if (missingHeaders.length > 0) {
+      throw new Error(
+        `工作表“${sheetName}”表头不符合标准导入格式，缺少列：${missingHeaders.join('、')}。`,
+      );
+    }
+
     for (const [index, rawRow] of sheetRows.entries()) {
       const normalizedRecord = normalizeRecord(rawRow);
 
@@ -107,19 +112,12 @@ export function buildImportPreview({
 
       const rowNumber = index + 2;
       const rowId = `${sheetName}-${rowNumber}`;
-      const bankName = getField(normalizedRecord, 'bankName');
-
-      if (bankName) {
-        bankNames.add(bankName);
-      }
-
       const type =
-        normalizeQuestionType(getField(normalizedRecord, 'type')) ??
+        normalizeQuestionType(getField(normalizedRecord, '题型')) ??
         normalizeQuestionType(sheetName);
-      const stem = getField(normalizedRecord, 'stem');
-      const explanation = getField(normalizedRecord, 'explanation');
-      const tags = splitList(getField(normalizedRecord, 'tags'));
-      const rawAnswer = getField(normalizedRecord, 'answer');
+      const stem = getField(normalizedRecord, '题干');
+      const explanation = getField(normalizedRecord, '试题解析');
+      const rawAnswer = getField(normalizedRecord, '答案');
       const options = type === '判断' ? createJudgementOptions() : collectOptions(normalizedRecord);
       const answers = normalizeAnswers({
         type,
@@ -136,7 +134,7 @@ export function buildImportPreview({
         options,
         answers,
         explanation,
-        tags,
+        tags: [],
         errors: validateRow({
           type,
           stem,
@@ -156,13 +154,13 @@ export function buildImportPreview({
     throw new Error('没有读取到题目数据。请确认 Excel 第一行是表头，并且后续行包含题目内容。');
   }
 
-  const bankName = resolveBankName({
-    bankNames,
-    fileName,
-  });
+  const bankName = stripExtension(fileName);
+  const missingSheets = STANDARD_IMPORT_SHEETS.filter(
+    (sheetName) => !workbook.SheetNames.includes(sheetName),
+  );
 
-  if (bankNames.size > 1) {
-    workbookWarnings.push(`文件中检测到多个题库名称，预览阶段统一使用“${bankName}”入库。`);
+  if (missingSheets.length > 0) {
+    workbookWarnings.push(`未检测到这些标准工作表：${missingSheets.join('、')}。`);
   }
 
   return {
@@ -220,20 +218,20 @@ function normalizeRecord(row: RawSheetRow) {
   const normalized: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(row)) {
-    normalized[normalizeHeader(key)] = stringifyCell(value);
+    const normalizedKey = normalizeHeader(key);
+
+    if (!STANDARD_FIELD_SET.has(normalizedKey)) {
+      continue;
+    }
+
+    normalized[normalizedKey] = stringifyCell(value);
   }
 
   return normalized;
 }
 
-function getField(record: Record<string, string>, field: CanonicalField) {
-  for (const [key, value] of Object.entries(record)) {
-    if (HEADER_ALIAS_SETS[field].has(key)) {
-      return value;
-    }
-  }
-
-  return '';
+function getField(record: Record<string, string>, field: StandardField) {
+  return record[normalizeHeader(field)] ?? '';
 }
 
 function normalizeHeader(value: string) {
@@ -263,16 +261,7 @@ function normalizeQuestionType(value: string): QuestionType | null {
 }
 
 function collectOptions(record: Record<string, string>) {
-  const columnOptions = OPTION_KEYS.map((key) => ({
-    key,
-    text: getField(record, `option${key}` as CanonicalField),
-  })).filter((option) => option.text);
-
-  if (columnOptions.length > 0) {
-    return columnOptions;
-  }
-
-  const rawOptions = getField(record, 'options');
+  const rawOptions = getField(record, '选项');
 
   if (!rawOptions) {
     return [];
@@ -440,22 +429,6 @@ function splitList(value: string) {
     .filter(Boolean);
 }
 
-function resolveBankName({
-  bankNames,
-  fileName,
-}: {
-  bankNames: Set<string>;
-  fileName: string;
-}) {
-  const firstBankName = bankNames.values().next().value;
-
-  if (firstBankName) {
-    return firstBankName;
-  }
-
-  return stripExtension(fileName);
-}
-
 function stripExtension(fileName: string) {
   return fileName.replace(/\.[^.]+$/, '');
 }
@@ -465,4 +438,12 @@ function createJudgementOptions(): QuestionOption[] {
     { key: 'A', text: '正确' },
     { key: 'B', text: '错误' },
   ];
+}
+
+function getMissingHeaders(headers: string[]) {
+  const normalizedHeaders = new Set(headers.map((header) => normalizeHeader(header)));
+
+  return STANDARD_IMPORT_COLUMNS.filter(
+    (header) => !normalizedHeaders.has(normalizeHeader(header)),
+  );
 }

@@ -74,7 +74,7 @@ export function ImportPreviewScreen({
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>统一导入格式</Text>
         <Text style={styles.panelDescription}>
-          推荐优先使用这些标准列名。当前解析器也兼容常见别名，但最终都会统一映射到同一套题目结构。
+          当前只支持这一种标准模板，不再兼容旧版列名。非空工作表需要包含这些固定表头。
         </Text>
         <View style={styles.tagRow}>
           {preview.standardColumns.map((column) => (

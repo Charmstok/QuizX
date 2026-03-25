@@ -145,11 +145,10 @@ export function HomeScreen({
 
       <View style={styles.tipCard}>
         <Text style={styles.tipTitle}>当前标准导入列</Text>
-        <Text style={styles.tipText}>1. 题库名称</Text>
-        <Text style={styles.tipText}>2. 题型</Text>
-        <Text style={styles.tipText}>3. 题目</Text>
-        <Text style={styles.tipText}>4. 选项A ~ 选项D</Text>
-        <Text style={styles.tipText}>5. 答案 / 解析 / 标签</Text>
+        <Text style={styles.tipText}>1. 标准工作表：判断题 / 单选题 / 多选题 / 填空</Text>
+        <Text style={styles.tipText}>2. 标准表头：题干 / 选项 / 答案 / 难度 / 题型 / 试题解析</Text>
+        <Text style={styles.tipText}>3. 题库名默认取 Excel 文件名</Text>
+        <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
       </View>
 
       <View style={styles.planCard}>
