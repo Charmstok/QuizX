@@ -87,3 +87,42 @@ export type QuizSessionProgress = {
   updatedAt: string;
   answers: QuizAnswerRecord[];
 };
+
+export type ReciteFeedback = 'known' | 'fuzzy' | 'unknown';
+
+export type ReciteProgressRecord = {
+  questionId: string;
+  bankId: string;
+  masteryLevel: number;
+  reviewCount: number;
+  lastResult: ReciteFeedback | null;
+  updatedAt: string;
+};
+
+export type ReciteSessionProgress = {
+  id: string;
+  bankId: string;
+  bankName: string;
+  totalQuestions: number;
+  reviewedQuestions: number;
+  currentIndex: number;
+  questionIds: string[];
+  knownCount: number;
+  fuzzyCount: number;
+  unknownCount: number;
+  startedAt: string;
+  updatedAt: string;
+};
+
+export type ReciteSessionSummary = {
+  id: string;
+  bankId: string;
+  bankName: string;
+  totalQuestions: number;
+  reviewedQuestions: number;
+  knownCount: number;
+  fuzzyCount: number;
+  unknownCount: number;
+  startedAt: string;
+  completedAt: string;
+};

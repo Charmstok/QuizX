@@ -80,7 +80,7 @@ export function HomeScreen({
       </View>
 
       <View style={styles.sectionGap}>
-        <SectionTitle title="学习入口" subtitle="答题模式已经接入最小可运行闭环，其余两个模块继续保留占位页。" />
+        <SectionTitle title="学习入口" subtitle="答题模式和背诵模式已经可用，错题本继续保留占位页。" />
       </View>
       <View style={styles.modeList}>
         <ModeCard
@@ -92,8 +92,8 @@ export function HomeScreen({
         />
         <ModeCard
           title="背诵模式"
-          description="更适合快速记忆题干与答案，后续会增加掌握度标记。"
-          actionLabel="查看占位页"
+          description="现在会优先安排薄弱题，支持显示答案、掌握度标记和未完成进度恢复。"
+          actionLabel="开始背诵"
           accent={colors.success}
           onPress={() => onOpenTab('recite')}
         />
@@ -153,7 +153,7 @@ export function HomeScreen({
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 再补背诵模式和错题本数据闭环</Text>
+        <Text style={styles.tipText}>1. 补错题本的最小可运行闭环</Text>
         <Text style={styles.tipText}>2. 完善题库详情页和题目浏览</Text>
         <Text style={styles.tipText}>3. 后续再补微信来源和批量导入体验</Text>
       </View>

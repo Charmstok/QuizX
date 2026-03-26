@@ -8,29 +8,15 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
 import { PlaceholderScreen } from './src/screens/PlaceholderScreen';
 import { QuizModeScreen } from './src/screens/QuizModeScreen';
+import { ReciteModeScreen } from './src/screens/ReciteModeScreen';
 import { colors, radius, spacing } from './src/theme';
 import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
 
-const TAB_CONFIG: Record<
-  Exclude<StudyTab, 'home'>,
-  { title: string; description: string; checklist: string[] }
-> = {
-  quiz: {
-    title: '答题模式',
-    description: '后续会在这里接入顺序刷题、随机刷题、提交答案与即时判分。',
-    checklist: ['题库选择', '单题作答', '答案判定', '答题记录入库'],
-  },
-  recite: {
-    title: '背诵模式',
-    description: '后续会在这里接入看题记忆、展开答案、标记掌握程度等轻量学习流程。',
-    checklist: ['只看题干', '点击显示答案', '标记会/模糊/不会', '复习状态更新'],
-  },
-  wrong: {
-    title: '错题本',
-    description: '后续会在这里接入错题筛选、重做和恢复掌握状态等功能。',
-    checklist: ['错题列表', '按题库筛选', '再次作答', '错题移出'],
-  },
+const WRONG_TAB_CONFIG = {
+  title: '错题本',
+  description: '后续会在这里接入错题筛选、重做和恢复掌握状态等功能。',
+  checklist: ['错题列表', '按题库筛选', '再次作答', '错题移出'],
 };
 
 export default function App() {
@@ -133,11 +119,13 @@ function AppShell() {
             />
           ) : activeTab === 'quiz' ? (
             <QuizModeScreen banks={banks} />
+          ) : activeTab === 'recite' ? (
+            <ReciteModeScreen banks={banks} />
           ) : (
             <PlaceholderScreen
-              title={TAB_CONFIG[activeTab].title}
-              description={TAB_CONFIG[activeTab].description}
-              checklist={TAB_CONFIG[activeTab].checklist}
+              title={WRONG_TAB_CONFIG.title}
+              description={WRONG_TAB_CONFIG.description}
+              checklist={WRONG_TAB_CONFIG.checklist}
               onBackHome={() => setActiveTab('home')}
             />
           )}
