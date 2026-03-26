@@ -109,7 +109,7 @@ export async function listQuestionBanks(db: SQLiteDatabase): Promise<QuestionBan
     fileName: row.file_name,
     questionCount: row.question_count,
     questionTypes: safeParseQuestionTypes(row.question_types_json),
-    updatedAt: row.updated_at.slice(0, 10),
+    updatedAt: formatLocalDate(row.updated_at),
   }));
 }
 
@@ -128,8 +128,8 @@ export async function saveImportPreview(
   const bankId = createId('bank');
   const questionTypesJson = JSON.stringify(stats.questionTypes);
 
-  await db.withExclusiveTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
       `
         INSERT INTO question_banks (
           id,
@@ -154,7 +154,7 @@ export async function saveImportPreview(
       now,
     );
 
-    const statement = await db.prepareAsync(`
+    const statement = await txn.prepareAsync(`
       INSERT INTO questions (
         id,
         bank_id,
@@ -216,7 +216,7 @@ export async function saveImportPreview(
     fileName: preview.fileName,
     questionCount: validRows.length,
     questionTypes: stats.questionTypes,
-    updatedAt: now.slice(0, 10),
+    updatedAt: formatLocalDate(now),
   };
 }
 
@@ -454,6 +454,20 @@ function createId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function formatLocalDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 10);
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
 async function createQuestionSchema(db: SQLiteDatabase) {
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS question_banks (
@@ -571,8 +585,8 @@ async function persistQuizSessionState(
   const now = new Date().toISOString();
   const correctQuestions = input.answers.filter((item) => item.isCorrect).length;
 
-  await db.withExclusiveTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
       `
         UPDATE quiz_sessions
         SET
@@ -597,9 +611,9 @@ async function persistQuizSessionState(
       input.sessionId,
     );
 
-    await db.runAsync(`DELETE FROM quiz_session_answers WHERE session_id = ?`, input.sessionId);
+    await txn.runAsync(`DELETE FROM quiz_session_answers WHERE session_id = ?`, input.sessionId);
 
-    const statement = await db.prepareAsync(`
+    const statement = await txn.prepareAsync(`
       INSERT INTO quiz_session_answers (
         id,
         session_id,

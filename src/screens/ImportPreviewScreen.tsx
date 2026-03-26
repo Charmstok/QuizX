@@ -99,7 +99,7 @@ export function ImportPreviewScreen({
       {invalidRows.length > 0 ? (
         <View style={[styles.panel, styles.errorPanel]}>
           <Text style={styles.errorTitle}>未通过校验的行</Text>
-          {invalidRows.slice(0, 6).map((row) => (
+          {invalidRows.map((row) => (
             <View key={row.id} style={styles.issueRow}>
               <Text style={styles.issueLabel}>
                 {row.sheetName} · 第 {row.rowNumber} 行
@@ -111,9 +111,6 @@ export function ImportPreviewScreen({
               ))}
             </View>
           ))}
-          {invalidRows.length > 6 ? (
-            <Text style={styles.issueMore}>其余 {invalidRows.length - 6} 行请继续向下检查。</Text>
-          ) : null}
         </View>
       ) : null}
 
@@ -349,10 +346,6 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 13,
     lineHeight: 20,
-  },
-  issueMore: {
-    color: colors.textSecondary,
-    fontSize: 13,
   },
   previewList: {
     gap: spacing.md,

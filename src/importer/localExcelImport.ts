@@ -85,7 +85,7 @@ export function buildImportPreview({
     const sheetRows = utils.sheet_to_json<RawSheetRow>(worksheet, {
       defval: '',
       raw: false,
-      blankrows: false,
+      blankrows: true,
     });
 
     if (sheetRows.length === 0) {

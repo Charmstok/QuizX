@@ -22,7 +22,7 @@ export type SQLiteStatement = {
   finalizeAsync(): Promise<void>;
 };
 
-export type SQLiteDatabase = {
+export type SQLiteExecutor = {
   execAsync(sql: string): Promise<void>;
   runAsync(
     sql: string,
@@ -43,7 +43,10 @@ export type SQLiteDatabase = {
     >
   ): Promise<T | null>;
   prepareAsync(sql: string): Promise<SQLiteStatement>;
-  withExclusiveTransactionAsync(task: () => Promise<void>): Promise<void>;
+};
+
+export type SQLiteDatabase = SQLiteExecutor & {
+  withExclusiveTransactionAsync(task: (txn: SQLiteExecutor) => Promise<void>): Promise<void>;
 };
 
 export type SQLiteProviderProps = {

@@ -201,7 +201,6 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
     const nextRecord = createAnswerRecord(question, selectedAnswers);
     const nextAnswers = [...submittedAnswers, nextRecord];
 
-    setSubmittedAnswers(nextAnswers);
     setIsSyncingProgress(true);
 
     try {
@@ -212,6 +211,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
         answers: nextAnswers,
         totalQuestions: questions.length,
       });
+      setSubmittedAnswers(nextAnswers);
     } catch (error) {
       const message = error instanceof Error ? error.message : '保存作答进度失败。';
       Alert.alert('保存进度失败', message);
@@ -346,6 +346,8 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
 
   const progressText = `${currentIndex + 1} / ${questions.length}`;
   const correctCount = submittedAnswers.filter((item) => item.isCorrect).length;
+  const requiresManualSubmit =
+    currentQuestion.type === '多选' || currentQuestion.type === '填空';
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -450,7 +452,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
                   : '下一题'}
             </Text>
           </Pressable>
-        ) : (
+        ) : requiresManualSubmit ? (
           <Pressable
             onPress={() => void handleSubmitCurrent()}
             disabled={isSyncingProgress}
@@ -463,7 +465,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
               {isSyncingProgress ? '保存中...' : '提交答案'}
             </Text>
           </Pressable>
-        )}
+        ) : null}
 
         <Pressable
           onPress={handleChangeBank}
@@ -473,7 +475,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
             (pressed || isSaving || isSyncingProgress) && styles.pressed,
           ]}
         >
-          <Text style={styles.secondaryButtonText}>退出本轮并更换题库</Text>
+          <Text style={styles.secondaryButtonText}>返回题库列表并保留进度</Text>
         </Pressable>
       </View>
     </ScrollView>
