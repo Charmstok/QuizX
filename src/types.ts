@@ -75,3 +75,15 @@ export type QuizSessionSummary = {
   startedAt: string;
   completedAt: string;
 };
+
+export type QuizSessionProgress = {
+  id: string;
+  bankId: string;
+  bankName: string;
+  totalQuestions: number;
+  answeredQuestions: number;
+  correctQuestions: number;
+  startedAt: string;
+  updatedAt: string;
+  answers: QuizAnswerRecord[];
+};

@@ -2,13 +2,21 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { useState } from 'react';
 
 import { SectionTitle } from '../components/SectionTitle';
-import { listQuestionsByBank, saveQuizSession } from '../db/quizDb';
+import {
+  createQuizSession,
+  discardQuizSession,
+  getInProgressQuizSession,
+  listQuestionsByBank,
+  saveQuizSession,
+  saveQuizSessionProgress,
+} from '../db/quizDb';
 import { colors, radius, spacing } from '../theme';
 import type {
   QuestionBank,
   QuestionOption,
   QuizAnswerRecord,
   QuizQuestion,
+  QuizSessionProgress,
   QuizSessionSummary,
 } from '../types';
 import { useSQLiteContext } from '../vendor/expoSqlite';
@@ -20,6 +28,7 @@ type QuizModeScreenProps = {
 export function QuizModeScreen({ banks }: QuizModeScreenProps) {
   const db = useSQLiteContext();
   const [activeBank, setActiveBank] = useState<QuestionBank | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [draftAnswers, setDraftAnswers] = useState<string[]>([]);
@@ -28,6 +37,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const [summary, setSummary] = useState<QuizSessionSummary | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncingProgress, setIsSyncingProgress] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const currentQuestion = questions[currentIndex] ?? null;
@@ -46,14 +56,41 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
         return;
       }
 
-      setActiveBank(bank);
-      setQuestions(nextQuestions);
-      setCurrentIndex(0);
-      setDraftAnswers([]);
-      setDraftTextAnswer('');
-      setSubmittedAnswers([]);
-      setStartedAt(new Date().toISOString());
-      setSummary(null);
+      let existingSession = await getInProgressQuizSession(db, bank.id);
+
+      if (existingSession && existingSession.answeredQuestions >= nextQuestions.length) {
+        await discardQuizSession(db, existingSession.id);
+        existingSession = null;
+      }
+
+      if (existingSession) {
+        setIsLoading(false);
+        const action = await promptQuizSessionChoice(
+          bank.name,
+          existingSession.answeredQuestions,
+          nextQuestions.length,
+        );
+
+        if (action === 'cancel') {
+          return;
+        }
+
+        setIsLoading(true);
+
+        if (action === 'resume') {
+          applySessionState(bank, nextQuestions, existingSession);
+          return;
+        }
+
+        await discardQuizSession(db, existingSession.id);
+      }
+
+      const createdSession = await createQuizSession(db, {
+        bank,
+        totalQuestions: nextQuestions.length,
+      });
+
+      applySessionState(bank, nextQuestions, createdSession);
     } catch (error) {
       const message = error instanceof Error ? error.message : '读取题目失败。';
       Alert.alert('无法开始答题', message);
@@ -62,8 +99,8 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
     }
   };
 
-  const handleSubmitCurrent = () => {
-    if (!currentQuestion || currentRecord) {
+  const handleSubmitCurrent = async () => {
+    if (!currentQuestion || currentRecord || isSyncingProgress) {
       return;
     }
 
@@ -74,7 +111,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
       return;
     }
 
-    submitQuestionAnswer(currentQuestion, selectedAnswers, setSubmittedAnswers);
+    await submitAnswer(currentQuestion, selectedAnswers);
   };
 
   const handleAdvance = async () => {
@@ -88,7 +125,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
       return;
     }
 
-    if (!activeBank || !startedAt) {
+    if (!activeBank || !startedAt || !activeSessionId) {
       return;
     }
 
@@ -96,6 +133,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
 
     try {
       const savedSummary = await saveQuizSession(db, {
+        sessionId: activeSessionId,
         bank: activeBank,
         startedAt,
         answers: submittedAnswers,
@@ -127,12 +165,75 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
     setDraftTextAnswer('');
     setSubmittedAnswers([]);
     setStartedAt(null);
+    setActiveSessionId(null);
     setSummary(null);
   };
 
   const resetDraftForNextQuestion = () => {
     setDraftAnswers([]);
     setDraftTextAnswer('');
+  };
+
+  const handlePickOption = async (option: QuestionOption) => {
+    if (!currentQuestion || currentRecord || isSyncingProgress) {
+      return;
+    }
+
+    if (currentQuestion.type === '单选' || currentQuestion.type === '判断') {
+      const selectedAnswers = [option.key];
+      setDraftAnswers(selectedAnswers);
+      await submitAnswer(currentQuestion, selectedAnswers);
+      return;
+    }
+
+    setDraftAnswers(
+      draftAnswers.includes(option.key)
+        ? draftAnswers.filter((item) => item !== option.key)
+        : [...draftAnswers, option.key],
+    );
+  };
+
+  const submitAnswer = async (question: QuizQuestion, selectedAnswers: string[]) => {
+    if (!activeBank || !startedAt || !activeSessionId) {
+      return;
+    }
+
+    const nextRecord = createAnswerRecord(question, selectedAnswers);
+    const nextAnswers = [...submittedAnswers, nextRecord];
+
+    setSubmittedAnswers(nextAnswers);
+    setIsSyncingProgress(true);
+
+    try {
+      await saveQuizSessionProgress(db, {
+        sessionId: activeSessionId,
+        bank: activeBank,
+        startedAt,
+        answers: nextAnswers,
+        totalQuestions: questions.length,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '保存作答进度失败。';
+      Alert.alert('保存进度失败', message);
+    } finally {
+      setIsSyncingProgress(false);
+    }
+  };
+
+  const applySessionState = (
+    bank: QuestionBank,
+    nextQuestions: QuizQuestion[],
+    session: QuizSessionProgress,
+  ) => {
+    setActiveBank(bank);
+    setActiveSessionId(session.id);
+    setQuestions(nextQuestions);
+    setCurrentIndex(Math.min(session.answeredQuestions, Math.max(nextQuestions.length - 1, 0)));
+    setDraftAnswers([]);
+    setDraftTextAnswer('');
+    setSubmittedAnswers(session.answers);
+    setStartedAt(session.startedAt);
+    setSummary(null);
   };
 
   if (summary && activeBank) {
@@ -297,17 +398,8 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
               return (
                 <Pressable
                   key={option.key}
-                  onPress={() =>
-                    handlePickOption(
-                      currentQuestion,
-                      option,
-                      draftAnswers,
-                      currentRecord,
-                      setDraftAnswers,
-                      setSubmittedAnswers,
-                    )
-                  }
-                  disabled={Boolean(currentRecord)}
+                  onPress={() => void handlePickOption(option)}
+                  disabled={Boolean(currentRecord) || isSyncingProgress}
                   style={({ pressed }) => [
                     styles.optionCard,
                     isSelected && styles.optionCardSelected,
@@ -360,49 +452,31 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
           </Pressable>
         ) : (
           <Pressable
-            onPress={handleSubmitCurrent}
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            onPress={() => void handleSubmitCurrent()}
+            disabled={isSyncingProgress}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (pressed || isSyncingProgress) && styles.pressed,
+            ]}
           >
-            <Text style={styles.primaryButtonText}>提交答案</Text>
+            <Text style={styles.primaryButtonText}>
+              {isSyncingProgress ? '保存中...' : '提交答案'}
+            </Text>
           </Pressable>
         )}
 
         <Pressable
           onPress={handleChangeBank}
-          disabled={isSaving}
-          style={({ pressed }) => [styles.secondaryButton, (pressed || isSaving) && styles.pressed]}
+          disabled={isSaving || isSyncingProgress}
+          style={({ pressed }) => [
+            styles.secondaryButton,
+            (pressed || isSaving || isSyncingProgress) && styles.pressed,
+          ]}
         >
           <Text style={styles.secondaryButtonText}>退出本轮并更换题库</Text>
         </Pressable>
       </View>
     </ScrollView>
-  );
-}
-
-function handlePickOption(
-  question: QuizQuestion,
-  option: QuestionOption,
-  draftAnswers: string[],
-  currentRecord: QuizAnswerRecord | null,
-  setDraftAnswers: (answers: string[]) => void,
-  setSubmittedAnswers: (updater: (answers: QuizAnswerRecord[]) => QuizAnswerRecord[]) => void,
-) {
-  if (currentRecord) {
-    return;
-  }
-
-  if (question.type === '单选' || question.type === '判断') {
-    const selectedAnswers = [option.key];
-
-    setDraftAnswers(selectedAnswers);
-    submitQuestionAnswer(question, selectedAnswers, setSubmittedAnswers);
-    return;
-  }
-
-  setDraftAnswers(
-    draftAnswers.includes(option.key)
-      ? draftAnswers.filter((item) => item !== option.key)
-      : [...draftAnswers, option.key],
   );
 }
 
@@ -425,12 +499,11 @@ function splitFillAnswers(value: string) {
     .filter(Boolean);
 }
 
-function submitQuestionAnswer(
+function createAnswerRecord(
   question: QuizQuestion,
   selectedAnswers: string[],
-  setSubmittedAnswers: (updater: (answers: QuizAnswerRecord[]) => QuizAnswerRecord[]) => void,
 ) {
-  const nextRecord: QuizAnswerRecord = {
+  return {
     questionId: question.id,
     questionType: question.type,
     questionStem: question.stem,
@@ -438,8 +511,6 @@ function submitQuestionAnswer(
     correctAnswers: question.answers,
     isCorrect: isAnswerCorrect(question, selectedAnswers),
   };
-
-  setSubmittedAnswers((prev) => [...prev, nextRecord]);
 }
 
 function isAnswerCorrect(question: QuizQuestion, selectedAnswers: string[]) {
@@ -495,6 +566,38 @@ function getEmptyAnswerMessage(question: QuizQuestion) {
 
 function currentQuestionForReview(record: QuizAnswerRecord, questions: QuizQuestion[]) {
   return questions.find((item) => item.id === record.questionId) ?? null;
+}
+
+function promptQuizSessionChoice(
+  bankName: string,
+  answeredQuestions: number,
+  totalQuestions: number,
+) {
+  return new Promise<'resume' | 'restart' | 'cancel'>((resolve) => {
+    let settled = false;
+    const finish = (value: 'resume' | 'restart' | 'cancel') => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(value);
+    };
+
+    Alert.alert(
+      bankName,
+      `检测到上次未完成的练习，已答 ${answeredQuestions}/${totalQuestions} 题。`,
+      [
+        { text: '继续上次练习', onPress: () => finish('resume') },
+        { text: '重新开始', onPress: () => finish('restart') },
+        { text: '取消', style: 'cancel', onPress: () => finish('cancel') },
+      ],
+      {
+        cancelable: true,
+        onDismiss: () => finish('cancel'),
+      },
+    );
+  });
 }
 
 const styles = StyleSheet.create({

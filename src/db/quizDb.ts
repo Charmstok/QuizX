@@ -8,11 +8,12 @@ import type {
   QuestionType,
   QuizAnswerRecord,
   QuizQuestion,
+  QuizSessionProgress,
   QuizSessionSummary,
 } from '../types';
 import type { SQLiteDatabase } from '../vendor/expoSqlite';
 
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const IMPORT_TEMPLATE_VERSION = 1;
 
 type QuestionBankRow = {
@@ -37,6 +38,28 @@ type QuestionRow = {
   sort_order: number;
 };
 
+type QuizSessionRow = {
+  id: string;
+  bank_id: string;
+  bank_name_snapshot: string;
+  total_questions: number;
+  answered_questions: number;
+  correct_questions: number;
+  started_at: string;
+  completed_at: string;
+  status: 'in_progress' | 'completed';
+  updated_at: string;
+};
+
+type QuizSessionAnswerRow = {
+  question_id: string;
+  question_type: QuestionType;
+  question_stem_snapshot: string;
+  selected_answers_json: string;
+  correct_answers_json: string;
+  is_correct: number;
+};
+
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
@@ -56,6 +79,10 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
   if (currentVersion < 2) {
     await createQuizSessionSchema(db);
+  }
+
+  if (currentVersion >= 2 && currentVersion < 3) {
+    await upgradeQuizSessionSchemaV3(db);
   }
 
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
@@ -232,6 +259,7 @@ export async function listQuestionsByBank(
 export async function saveQuizSession(
   db: SQLiteDatabase,
   input: {
+    sessionId: string;
     bank: QuestionBank;
     startedAt: string;
     answers: QuizAnswerRecord[];
@@ -239,78 +267,20 @@ export async function saveQuizSession(
   },
 ): Promise<QuizSessionSummary> {
   const now = new Date().toISOString();
-  const sessionId = createId('session');
   const correctQuestions = input.answers.filter((item) => item.isCorrect).length;
 
-  await db.withExclusiveTransactionAsync(async () => {
-    await db.runAsync(
-      `
-        INSERT INTO quiz_sessions (
-          id,
-          bank_id,
-          bank_name_snapshot,
-          total_questions,
-          answered_questions,
-          correct_questions,
-          started_at,
-          completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      sessionId,
-      input.bank.id,
-      input.bank.name,
-      input.totalQuestions,
-      input.answers.length,
-      correctQuestions,
-      input.startedAt,
-      now,
-    );
-
-    const statement = await db.prepareAsync(`
-      INSERT INTO quiz_session_answers (
-        id,
-        session_id,
-        question_id,
-        question_type,
-        question_stem_snapshot,
-        selected_answers_json,
-        correct_answers_json,
-        is_correct,
-        created_at
-      ) VALUES (
-        $id,
-        $sessionId,
-        $questionId,
-        $questionType,
-        $questionStemSnapshot,
-        $selectedAnswersJson,
-        $correctAnswersJson,
-        $isCorrect,
-        $createdAt
-      )
-    `);
-
-    try {
-      for (const answer of input.answers) {
-        await statement.executeAsync({
-          $id: createId('session-answer'),
-          $sessionId: sessionId,
-          $questionId: answer.questionId,
-          $questionType: answer.questionType,
-          $questionStemSnapshot: answer.questionStem,
-          $selectedAnswersJson: JSON.stringify(answer.selectedAnswers),
-          $correctAnswersJson: JSON.stringify(answer.correctAnswers),
-          $isCorrect: answer.isCorrect ? 1 : 0,
-          $createdAt: now,
-        });
-      }
-    } finally {
-      await statement.finalizeAsync();
-    }
+  await persistQuizSessionState(db, {
+    sessionId: input.sessionId,
+    bank: input.bank,
+    startedAt: input.startedAt,
+    answers: input.answers,
+    totalQuestions: input.totalQuestions,
+    status: 'completed',
+    completedAt: now,
   });
 
   return {
-    id: sessionId,
+    id: input.sessionId,
     bankId: input.bank.id,
     bankName: input.bank.name,
     totalQuestions: input.totalQuestions,
@@ -320,6 +290,142 @@ export async function saveQuizSession(
     startedAt: input.startedAt,
     completedAt: now,
   };
+}
+
+export async function createQuizSession(
+  db: SQLiteDatabase,
+  input: {
+    bank: QuestionBank;
+    totalQuestions: number;
+  },
+): Promise<QuizSessionProgress> {
+  const now = new Date().toISOString();
+  const sessionId = createId('session');
+
+  await db.runAsync(
+    `
+      INSERT INTO quiz_sessions (
+        id,
+        bank_id,
+        bank_name_snapshot,
+        total_questions,
+        answered_questions,
+        correct_questions,
+        started_at,
+        completed_at,
+        status,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    sessionId,
+    input.bank.id,
+    input.bank.name,
+    input.totalQuestions,
+    0,
+    0,
+    now,
+    '',
+    'in_progress',
+    now,
+  );
+
+  return {
+    id: sessionId,
+    bankId: input.bank.id,
+    bankName: input.bank.name,
+    totalQuestions: input.totalQuestions,
+    answeredQuestions: 0,
+    correctQuestions: 0,
+    startedAt: now,
+    updatedAt: now,
+    answers: [],
+  };
+}
+
+export async function saveQuizSessionProgress(
+  db: SQLiteDatabase,
+  input: {
+    sessionId: string;
+    bank: QuestionBank;
+    startedAt: string;
+    answers: QuizAnswerRecord[];
+    totalQuestions: number;
+  },
+) {
+  await persistQuizSessionState(db, {
+    ...input,
+    status: 'in_progress',
+    completedAt: '',
+  });
+}
+
+export async function getInProgressQuizSession(
+  db: SQLiteDatabase,
+  bankId: string,
+): Promise<QuizSessionProgress | null> {
+  const session = await db.getFirstAsync<QuizSessionRow>(
+    `
+      SELECT
+        id,
+        bank_id,
+        bank_name_snapshot,
+        total_questions,
+        answered_questions,
+        correct_questions,
+        started_at,
+        completed_at,
+        status,
+        updated_at
+      FROM quiz_sessions
+      WHERE bank_id = ? AND status = 'in_progress'
+      ORDER BY datetime(updated_at) DESC
+      LIMIT 1
+    `,
+    bankId,
+  );
+
+  if (!session) {
+    return null;
+  }
+
+  const answerRows = await db.getAllAsync<QuizSessionAnswerRow>(
+    `
+      SELECT
+        question_id,
+        question_type,
+        question_stem_snapshot,
+        selected_answers_json,
+        correct_answers_json,
+        is_correct
+      FROM quiz_session_answers
+      WHERE session_id = ?
+      ORDER BY created_at ASC
+    `,
+    session.id,
+  );
+
+  return {
+    id: session.id,
+    bankId: session.bank_id,
+    bankName: session.bank_name_snapshot,
+    totalQuestions: session.total_questions,
+    answeredQuestions: session.answered_questions,
+    correctQuestions: session.correct_questions,
+    startedAt: session.started_at,
+    updatedAt: session.updated_at,
+    answers: answerRows.map((row) => ({
+      questionId: row.question_id,
+      questionType: row.question_type,
+      questionStem: row.question_stem_snapshot,
+      selectedAnswers: safeParseJson(row.selected_answers_json, []),
+      correctAnswers: safeParseJson(row.correct_answers_json, []),
+      isCorrect: Boolean(row.is_correct),
+    })),
+  };
+}
+
+export async function discardQuizSession(db: SQLiteDatabase, sessionId: string) {
+  await db.runAsync(`DELETE FROM quiz_sessions WHERE id = ?`, sessionId);
 }
 
 function safeParseQuestionTypes(value: string): QuestionType[] {
@@ -400,7 +506,9 @@ async function createQuizSessionSchema(db: SQLiteDatabase) {
       answered_questions INTEGER NOT NULL,
       correct_questions INTEGER NOT NULL,
       started_at TEXT NOT NULL,
-      completed_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'completed',
+      updated_at TEXT NOT NULL,
       FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
     );
 
@@ -421,7 +529,116 @@ async function createQuizSessionSchema(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_quiz_sessions_bank_completed
       ON quiz_sessions(bank_id, completed_at DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_quiz_sessions_bank_status_updated
+      ON quiz_sessions(bank_id, status, updated_at DESC);
+
     CREATE INDEX IF NOT EXISTS idx_quiz_session_answers_session
       ON quiz_session_answers(session_id);
   `);
+}
+
+async function upgradeQuizSessionSchemaV3(db: SQLiteDatabase) {
+  await db.execAsync(`
+    ALTER TABLE quiz_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
+    ALTER TABLE quiz_sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+
+    UPDATE quiz_sessions
+    SET
+      status = 'completed',
+      updated_at = CASE
+        WHEN completed_at <> '' THEN completed_at
+        ELSE started_at
+      END
+    WHERE status IS NULL OR status = '' OR updated_at = '';
+
+    CREATE INDEX IF NOT EXISTS idx_quiz_sessions_bank_status_updated
+      ON quiz_sessions(bank_id, status, updated_at DESC);
+  `);
+}
+
+async function persistQuizSessionState(
+  db: SQLiteDatabase,
+  input: {
+    sessionId: string;
+    bank: QuestionBank;
+    startedAt: string;
+    answers: QuizAnswerRecord[];
+    totalQuestions: number;
+    status: 'in_progress' | 'completed';
+    completedAt: string;
+  },
+) {
+  const now = new Date().toISOString();
+  const correctQuestions = input.answers.filter((item) => item.isCorrect).length;
+
+  await db.withExclusiveTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        UPDATE quiz_sessions
+        SET
+          bank_name_snapshot = ?,
+          total_questions = ?,
+          answered_questions = ?,
+          correct_questions = ?,
+          started_at = ?,
+          completed_at = ?,
+          status = ?,
+          updated_at = ?
+        WHERE id = ?
+      `,
+      input.bank.name,
+      input.totalQuestions,
+      input.answers.length,
+      correctQuestions,
+      input.startedAt,
+      input.completedAt,
+      input.status,
+      now,
+      input.sessionId,
+    );
+
+    await db.runAsync(`DELETE FROM quiz_session_answers WHERE session_id = ?`, input.sessionId);
+
+    const statement = await db.prepareAsync(`
+      INSERT INTO quiz_session_answers (
+        id,
+        session_id,
+        question_id,
+        question_type,
+        question_stem_snapshot,
+        selected_answers_json,
+        correct_answers_json,
+        is_correct,
+        created_at
+      ) VALUES (
+        $id,
+        $sessionId,
+        $questionId,
+        $questionType,
+        $questionStemSnapshot,
+        $selectedAnswersJson,
+        $correctAnswersJson,
+        $isCorrect,
+        $createdAt
+      )
+    `);
+
+    try {
+      for (const answer of input.answers) {
+        await statement.executeAsync({
+          $id: createId('session-answer'),
+          $sessionId: input.sessionId,
+          $questionId: answer.questionId,
+          $questionType: answer.questionType,
+          $questionStemSnapshot: answer.questionStem,
+          $selectedAnswersJson: JSON.stringify(answer.selectedAnswers),
+          $correctAnswersJson: JSON.stringify(answer.correctAnswers),
+          $isCorrect: answer.isCorrect ? 1 : 0,
+          $createdAt: now,
+        });
+      }
+    } finally {
+      await statement.finalizeAsync();
+    }
+  });
 }
