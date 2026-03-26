@@ -80,13 +80,13 @@ export function HomeScreen({
       </View>
 
       <View style={styles.sectionGap}>
-        <SectionTitle title="学习入口" subtitle="三个核心模块先打通页面跳转。" />
+        <SectionTitle title="学习入口" subtitle="答题模式已经接入最小可运行闭环，其余两个模块继续保留占位页。" />
       </View>
       <View style={styles.modeList}>
         <ModeCard
           title="答题模式"
-          description="进入刷题页面，后续会增加顺序练习、随机练习与成绩记录。"
-          actionLabel="查看占位页"
+          description="现在可以选择题库、逐题作答、即时判分，并在完成一轮后把结果写入 SQLite。"
+          actionLabel="开始顺序练习"
           accent={colors.brand}
           onPress={() => onOpenTab('quiz')}
         />
@@ -153,8 +153,8 @@ export function HomeScreen({
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 把导入后的题目接进真实答题流程</Text>
-        <Text style={styles.tipText}>2. 再补背诵模式和错题本数据闭环</Text>
+        <Text style={styles.tipText}>1. 再补背诵模式和错题本数据闭环</Text>
+        <Text style={styles.tipText}>2. 完善题库详情页和题目浏览</Text>
         <Text style={styles.tipText}>3. 后续再补微信来源和批量导入体验</Text>
       </View>
     </ScrollView>

@@ -2,10 +2,17 @@ import {
   getImportPreviewStats,
   isImportRowValid,
 } from '../importer/localExcelImport';
-import type { ImportPreview, QuestionBank, QuestionType } from '../types';
+import type {
+  ImportPreview,
+  QuestionBank,
+  QuestionType,
+  QuizAnswerRecord,
+  QuizQuestion,
+  QuizSessionSummary,
+} from '../types';
 import type { SQLiteDatabase } from '../vendor/expoSqlite';
 
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const IMPORT_TEMPLATE_VERSION = 1;
 
 type QuestionBankRow = {
@@ -16,6 +23,18 @@ type QuestionBankRow = {
   question_count: number;
   question_types_json: string;
   updated_at: string;
+};
+
+type QuestionRow = {
+  id: string;
+  bank_id: string;
+  type: QuestionType;
+  stem: string;
+  options_json: string;
+  answers_json: string;
+  explanation: string;
+  source_sheet: string;
+  sort_order: number;
 };
 
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {
@@ -31,47 +50,15 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     return;
   }
 
-  await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS question_banks (
-      id TEXT PRIMARY KEY NOT NULL,
-      name TEXT NOT NULL,
-      source TEXT NOT NULL,
-      file_name TEXT,
-      question_count INTEGER NOT NULL DEFAULT 0,
-      question_types_json TEXT NOT NULL DEFAULT '[]',
-      import_template_version INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
+  if (currentVersion < 1) {
+    await createQuestionSchema(db);
+  }
 
-    CREATE TABLE IF NOT EXISTS questions (
-      id TEXT PRIMARY KEY NOT NULL,
-      bank_id TEXT NOT NULL,
-      type TEXT NOT NULL,
-      stem TEXT NOT NULL,
-      options_json TEXT NOT NULL DEFAULT '[]',
-      answers_json TEXT NOT NULL DEFAULT '[]',
-      explanation TEXT NOT NULL DEFAULT '',
-      tags_json TEXT NOT NULL DEFAULT '[]',
-      source_sheet TEXT NOT NULL DEFAULT '',
-      source_row INTEGER NOT NULL,
-      sort_order INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
-    );
+  if (currentVersion < 2) {
+    await createQuizSessionSchema(db);
+  }
 
-    CREATE INDEX IF NOT EXISTS idx_question_banks_updated_at
-      ON question_banks(updated_at DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_questions_bank_id
-      ON questions(bank_id);
-
-    CREATE INDEX IF NOT EXISTS idx_questions_bank_sort
-      ON questions(bank_id, sort_order);
-
-    PRAGMA user_version = ${DATABASE_VERSION};
-  `);
+  await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
 }
 
 export async function listQuestionBanks(db: SQLiteDatabase): Promise<QuestionBank[]> {
@@ -206,6 +193,135 @@ export async function saveImportPreview(
   };
 }
 
+export async function listQuestionsByBank(
+  db: SQLiteDatabase,
+  bankId: string,
+): Promise<QuizQuestion[]> {
+  const rows = await db.getAllAsync<QuestionRow>(
+    `
+      SELECT
+        id,
+        bank_id,
+        type,
+        stem,
+        options_json,
+        answers_json,
+        explanation,
+        source_sheet,
+        sort_order
+      FROM questions
+      WHERE bank_id = ?
+      ORDER BY sort_order ASC, source_row ASC
+    `,
+    bankId,
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    bankId: row.bank_id,
+    type: row.type,
+    stem: row.stem,
+    options: safeParseJson(row.options_json, []),
+    answers: safeParseJson(row.answers_json, []),
+    explanation: row.explanation,
+    sourceSheet: row.source_sheet,
+    sortOrder: row.sort_order,
+  }));
+}
+
+export async function saveQuizSession(
+  db: SQLiteDatabase,
+  input: {
+    bank: QuestionBank;
+    startedAt: string;
+    answers: QuizAnswerRecord[];
+    totalQuestions: number;
+  },
+): Promise<QuizSessionSummary> {
+  const now = new Date().toISOString();
+  const sessionId = createId('session');
+  const correctQuestions = input.answers.filter((item) => item.isCorrect).length;
+
+  await db.withExclusiveTransactionAsync(async () => {
+    await db.runAsync(
+      `
+        INSERT INTO quiz_sessions (
+          id,
+          bank_id,
+          bank_name_snapshot,
+          total_questions,
+          answered_questions,
+          correct_questions,
+          started_at,
+          completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      sessionId,
+      input.bank.id,
+      input.bank.name,
+      input.totalQuestions,
+      input.answers.length,
+      correctQuestions,
+      input.startedAt,
+      now,
+    );
+
+    const statement = await db.prepareAsync(`
+      INSERT INTO quiz_session_answers (
+        id,
+        session_id,
+        question_id,
+        question_type,
+        question_stem_snapshot,
+        selected_answers_json,
+        correct_answers_json,
+        is_correct,
+        created_at
+      ) VALUES (
+        $id,
+        $sessionId,
+        $questionId,
+        $questionType,
+        $questionStemSnapshot,
+        $selectedAnswersJson,
+        $correctAnswersJson,
+        $isCorrect,
+        $createdAt
+      )
+    `);
+
+    try {
+      for (const answer of input.answers) {
+        await statement.executeAsync({
+          $id: createId('session-answer'),
+          $sessionId: sessionId,
+          $questionId: answer.questionId,
+          $questionType: answer.questionType,
+          $questionStemSnapshot: answer.questionStem,
+          $selectedAnswersJson: JSON.stringify(answer.selectedAnswers),
+          $correctAnswersJson: JSON.stringify(answer.correctAnswers),
+          $isCorrect: answer.isCorrect ? 1 : 0,
+          $createdAt: now,
+        });
+      }
+    } finally {
+      await statement.finalizeAsync();
+    }
+  });
+
+  return {
+    id: sessionId,
+    bankId: input.bank.id,
+    bankName: input.bank.name,
+    totalQuestions: input.totalQuestions,
+    answeredQuestions: input.answers.length,
+    correctQuestions,
+    accuracy: input.totalQuestions > 0 ? correctQuestions / input.totalQuestions : 0,
+    startedAt: input.startedAt,
+    completedAt: now,
+  };
+}
+
 function safeParseQuestionTypes(value: string): QuestionType[] {
   try {
     const parsed = JSON.parse(value) as QuestionType[];
@@ -220,6 +336,92 @@ function safeParseQuestionTypes(value: string): QuestionType[] {
   }
 }
 
+function safeParseJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function createId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function createQuestionSchema(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS question_banks (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      file_name TEXT,
+      question_count INTEGER NOT NULL DEFAULT 0,
+      question_types_json TEXT NOT NULL DEFAULT '[]',
+      import_template_version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS questions (
+      id TEXT PRIMARY KEY NOT NULL,
+      bank_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      stem TEXT NOT NULL,
+      options_json TEXT NOT NULL DEFAULT '[]',
+      answers_json TEXT NOT NULL DEFAULT '[]',
+      explanation TEXT NOT NULL DEFAULT '',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source_sheet TEXT NOT NULL DEFAULT '',
+      source_row INTEGER NOT NULL,
+      sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_question_banks_updated_at
+      ON question_banks(updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_id
+      ON questions(bank_id);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_sort
+      ON questions(bank_id, sort_order);
+  `);
+}
+
+async function createQuizSessionSchema(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS quiz_sessions (
+      id TEXT PRIMARY KEY NOT NULL,
+      bank_id TEXT NOT NULL,
+      bank_name_snapshot TEXT NOT NULL,
+      total_questions INTEGER NOT NULL,
+      answered_questions INTEGER NOT NULL,
+      correct_questions INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS quiz_session_answers (
+      id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      question_id TEXT NOT NULL,
+      question_type TEXT NOT NULL,
+      question_stem_snapshot TEXT NOT NULL,
+      selected_answers_json TEXT NOT NULL DEFAULT '[]',
+      correct_answers_json TEXT NOT NULL DEFAULT '[]',
+      is_correct INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES quiz_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_quiz_sessions_bank_completed
+      ON quiz_sessions(bank_id, completed_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_quiz_session_answers_session
+      ON quiz_session_answers(session_id);
+  `);
 }

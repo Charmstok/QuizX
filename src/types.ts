@@ -42,3 +42,36 @@ export type ImportPreview = {
   workbookWarnings: string[];
   rows: ImportQuestionRow[];
 };
+
+export type QuizQuestion = {
+  id: string;
+  bankId: string;
+  type: QuestionType;
+  stem: string;
+  options: QuestionOption[];
+  answers: string[];
+  explanation: string;
+  sourceSheet: string;
+  sortOrder: number;
+};
+
+export type QuizAnswerRecord = {
+  questionId: string;
+  questionType: QuestionType;
+  questionStem: string;
+  selectedAnswers: string[];
+  correctAnswers: string[];
+  isCorrect: boolean;
+};
+
+export type QuizSessionSummary = {
+  id: string;
+  bankId: string;
+  bankName: string;
+  totalQuestions: number;
+  answeredQuestions: number;
+  correctQuestions: number;
+  accuracy: number;
+  startedAt: string;
+  completedAt: string;
+};

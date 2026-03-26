@@ -7,6 +7,7 @@ import { pickAndParseLocalExcel } from './src/importer/localExcelImport';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
 import { PlaceholderScreen } from './src/screens/PlaceholderScreen';
+import { QuizModeScreen } from './src/screens/QuizModeScreen';
 import { colors, radius, spacing } from './src/theme';
 import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
@@ -130,6 +131,8 @@ function AppShell() {
               onOpenTab={setActiveTab}
               onImportLocal={handleImportLocal}
             />
+          ) : activeTab === 'quiz' ? (
+            <QuizModeScreen banks={banks} />
           ) : (
             <PlaceholderScreen
               title={TAB_CONFIG[activeTab].title}
