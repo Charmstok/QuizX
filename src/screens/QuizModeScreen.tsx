@@ -57,8 +57,18 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
       }
 
       let existingSession = await getInProgressQuizSession(db, bank.id);
+      const existingSessionQuestions = existingSession
+        ? buildQuestionsForSession(nextQuestions, existingSession.questionIds)
+        : [];
+      const existingSessionQuestionCount =
+        existingSessionQuestions.length > 0 ? existingSessionQuestions.length : nextQuestions.length;
 
-      if (existingSession && existingSession.answeredQuestions >= nextQuestions.length) {
+      if (existingSession && existingSession.questionIds.length > 0 && existingSessionQuestions.length === 0) {
+        await discardQuizSession(db, existingSession.id);
+        existingSession = null;
+      }
+
+      if (existingSession && existingSession.answeredQuestions >= existingSessionQuestionCount) {
         await discardQuizSession(db, existingSession.id);
         existingSession = null;
       }
@@ -78,7 +88,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
         setIsLoading(true);
 
         if (action === 'resume') {
-          applySessionState(bank, nextQuestions, existingSession);
+          applySessionState(bank, existingSessionQuestions, existingSession);
           return;
         }
 
@@ -88,6 +98,7 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
       const createdSession = await createQuizSession(db, {
         bank,
         totalQuestions: nextQuestions.length,
+        questionIds: nextQuestions.map((question) => question.id),
       });
 
       applySessionState(bank, nextQuestions, createdSession);
@@ -492,6 +503,18 @@ function buildSelectedAnswers(
   }
 
   return draftAnswers;
+}
+
+function buildQuestionsForSession(questions: QuizQuestion[], questionIds: string[]) {
+  if (questionIds.length === 0) {
+    return questions;
+  }
+
+  const byId = new Map(questions.map((question) => [question.id, question]));
+
+  return questionIds
+    .map((questionId) => byId.get(questionId) ?? null)
+    .filter((question): question is QuizQuestion => Boolean(question));
 }
 
 function splitFillAnswers(value: string) {

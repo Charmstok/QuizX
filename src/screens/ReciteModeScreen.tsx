@@ -3,14 +3,12 @@ import { useState } from 'react';
 
 import { SectionTitle } from '../components/SectionTitle';
 import {
-  completeReciteSession,
   createReciteSession,
   discardReciteSession,
   getInProgressReciteSession,
   listQuestionsByBank,
   listReciteProgressByBank,
-  saveReciteProgress,
-  saveReciteSessionProgress,
+  submitReciteFeedback,
 } from '../db/quizDb';
 import { colors, radius, spacing } from '../theme';
 import type {
@@ -63,11 +61,25 @@ export function ReciteModeScreen({ banks }: ReciteModeScreenProps) {
       }
 
       let existingSession = await getInProgressReciteSession(db, bank.id);
+      const existingSessionQuestions = existingSession
+        ? buildQuestionsForSession(nextQuestions, existingSession.questionIds)
+        : [];
+      const existingSessionQuestionCount =
+        existingSessionQuestions.length > 0 ? existingSessionQuestions.length : nextQuestions.length;
 
       if (
         existingSession &&
-        (existingSession.reviewedQuestions >= nextQuestions.length ||
-          existingSession.currentIndex >= nextQuestions.length)
+        existingSession.questionIds.length > 0 &&
+        existingSessionQuestions.length === 0
+      ) {
+        await discardReciteSession(db, existingSession.id);
+        existingSession = null;
+      }
+
+      if (
+        existingSession &&
+        (existingSession.reviewedQuestions >= existingSessionQuestionCount ||
+          existingSession.currentIndex >= existingSessionQuestionCount)
       ) {
         await discardReciteSession(db, existingSession.id);
         existingSession = null;
@@ -90,7 +102,7 @@ export function ReciteModeScreen({ banks }: ReciteModeScreenProps) {
         if (action === 'resume') {
           applySessionState(
             bank,
-            buildQuestionsForSession(nextQuestions, existingSession.questionIds),
+            existingSessionQuestions,
             existingSession,
             nextProgressByQuestionId,
           );
@@ -139,40 +151,11 @@ export function ReciteModeScreen({ banks }: ReciteModeScreenProps) {
     setIsSaving(true);
 
     try {
-      const nextProgress = await saveReciteProgress(db, {
-        bankId: activeBank.id,
-        questionId: currentQuestion.id,
-        feedback,
-      });
-      setProgressByQuestionId((previous) => ({
-        ...previous,
-        [nextProgress.questionId]: nextProgress,
-      }));
-
-      if (isLastQuestion) {
-        const nextSummary = await completeReciteSession(db, {
-          sessionId: activeSessionId,
-          bank: activeBank,
-          totalQuestions: questions.length,
-          reviewedQuestions: nextReviewedQuestions,
-          knownCount: nextKnownCount,
-          fuzzyCount: nextFuzzyCount,
-          unknownCount: nextUnknownCount,
-          startedAt,
-        });
-
-        setReviewedQuestions(nextReviewedQuestions);
-        setKnownCount(nextKnownCount);
-        setFuzzyCount(nextFuzzyCount);
-        setUnknownCount(nextUnknownCount);
-        setIsAnswerVisible(false);
-        setSummary(nextSummary);
-        return;
-      }
-
-      const nextSession = await saveReciteSessionProgress(db, {
+      const result = await submitReciteFeedback(db, {
         sessionId: activeSessionId,
         bank: activeBank,
+        questionId: currentQuestion.id,
+        feedback,
         totalQuestions: questions.length,
         reviewedQuestions: nextReviewedQuestions,
         currentIndex: currentIndex + 1,
@@ -180,13 +163,32 @@ export function ReciteModeScreen({ banks }: ReciteModeScreenProps) {
         fuzzyCount: nextFuzzyCount,
         unknownCount: nextUnknownCount,
         startedAt,
+        completeSession: isLastQuestion,
       });
+      setProgressByQuestionId((previous) => ({
+        ...previous,
+        [result.progress.questionId]: result.progress,
+      }));
 
-      setReviewedQuestions(nextSession.reviewedQuestions);
-      setCurrentIndex(nextSession.currentIndex);
-      setKnownCount(nextSession.knownCount);
-      setFuzzyCount(nextSession.fuzzyCount);
-      setUnknownCount(nextSession.unknownCount);
+      if (result.summary) {
+        setReviewedQuestions(nextReviewedQuestions);
+        setKnownCount(nextKnownCount);
+        setFuzzyCount(nextFuzzyCount);
+        setUnknownCount(nextUnknownCount);
+        setIsAnswerVisible(false);
+        setSummary(result.summary);
+        return;
+      }
+
+      if (!result.session) {
+        throw new Error('背诵进度未返回。');
+      }
+
+      setReviewedQuestions(result.session.reviewedQuestions);
+      setCurrentIndex(result.session.currentIndex);
+      setKnownCount(result.session.knownCount);
+      setFuzzyCount(result.session.fuzzyCount);
+      setUnknownCount(result.session.unknownCount);
       setIsAnswerVisible(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : '保存背诵进度失败。';
@@ -542,12 +544,10 @@ function buildQuestionsForSession(questions: QuizQuestion[], questionIds: string
   }
 
   const byId = new Map(questions.map((question) => [question.id, question]));
-  const orderedQuestions = questionIds
+
+  return questionIds
     .map((questionId) => byId.get(questionId) ?? null)
     .filter((question): question is QuizQuestion => Boolean(question));
-
-  const remainingQuestions = questions.filter((question) => !questionIds.includes(question.id));
-  return [...orderedQuestions, ...remainingQuestions];
 }
 
 function buildReciteQueue(

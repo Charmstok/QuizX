@@ -83,6 +83,7 @@ export type QuizSessionProgress = {
   totalQuestions: number;
   answeredQuestions: number;
   correctQuestions: number;
+  questionIds: string[];
   startedAt: string;
   updatedAt: string;
   answers: QuizAnswerRecord[];

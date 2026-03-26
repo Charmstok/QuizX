@@ -15,7 +15,7 @@ import type {
   QuizSessionProgress,
   QuizSessionSummary,
 } from '../types';
-import type { SQLiteDatabase } from '../vendor/expoSqlite';
+import type { SQLiteDatabase, SQLiteExecutor } from '../vendor/expoSqlite';
 
 const IMPORT_TEMPLATE_VERSION = 1;
 
@@ -63,6 +63,11 @@ type QuizSessionAnswerRow = {
   is_correct: number;
 };
 
+type QuizSessionItemRow = {
+  question_id: string;
+  sort_order: number;
+};
+
 type ReciteProgressRow = {
   question_id: string;
   bank_id: string;
@@ -88,7 +93,7 @@ type ReciteSessionRow = {
   updated_at: string;
 };
 
-const DATABASE_VERSION = 5;
+const DATABASE_VERSION = 6;
 
 type ReciteSessionItemRow = {
   question_id: string;
@@ -126,6 +131,10 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
   if (currentVersion < 5) {
     await createReciteSessionItemSchema(db);
+  }
+
+  if (currentVersion < 6) {
+    await upgradeSessionSchemaV6(db);
   }
 
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
@@ -340,37 +349,42 @@ export async function createQuizSession(
   input: {
     bank: QuestionBank;
     totalQuestions: number;
+    questionIds: string[];
   },
 ): Promise<QuizSessionProgress> {
   const now = new Date().toISOString();
   const sessionId = createId('session');
 
-  await db.runAsync(
-    `
-      INSERT INTO quiz_sessions (
-        id,
-        bank_id,
-        bank_name_snapshot,
-        total_questions,
-        answered_questions,
-        correct_questions,
-        started_at,
-        completed_at,
-        status,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-    sessionId,
-    input.bank.id,
-    input.bank.name,
-    input.totalQuestions,
-    0,
-    0,
-    now,
-    '',
-    'in_progress',
-    now,
-  );
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      `
+        INSERT INTO quiz_sessions (
+          id,
+          bank_id,
+          bank_name_snapshot,
+          total_questions,
+          answered_questions,
+          correct_questions,
+          started_at,
+          completed_at,
+          status,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      sessionId,
+      input.bank.id,
+      input.bank.name,
+      input.totalQuestions,
+      0,
+      0,
+      now,
+      '',
+      'in_progress',
+      now,
+    );
+
+    await insertSessionItems(txn, 'quiz_session_items', sessionId, input.questionIds);
+  });
 
   return {
     id: sessionId,
@@ -379,6 +393,7 @@ export async function createQuizSession(
     totalQuestions: input.totalQuestions,
     answeredQuestions: 0,
     correctQuestions: 0,
+    questionIds: input.questionIds,
     startedAt: now,
     updatedAt: now,
     answers: [],
@@ -447,6 +462,18 @@ export async function getInProgressQuizSession(
     session.id,
   );
 
+  const itemRows = await db.getAllAsync<QuizSessionItemRow>(
+    `
+      SELECT
+        question_id,
+        sort_order
+      FROM quiz_session_items
+      WHERE session_id = ?
+      ORDER BY sort_order ASC
+    `,
+    session.id,
+  );
+
   return {
     id: session.id,
     bankId: session.bank_id,
@@ -454,6 +481,7 @@ export async function getInProgressQuizSession(
     totalQuestions: session.total_questions,
     answeredQuestions: session.answered_questions,
     correctQuestions: session.correct_questions,
+    questionIds: itemRows.map((row) => row.question_id),
     startedAt: session.started_at,
     updatedAt: session.updated_at,
     answers: answerRows.map((row) => ({
@@ -712,6 +740,199 @@ export async function saveReciteProgress(
   };
 }
 
+export async function submitReciteFeedback(
+  db: SQLiteDatabase,
+  input: {
+    sessionId: string;
+    bank: QuestionBank;
+    questionId: string;
+    feedback: ReciteFeedback;
+    totalQuestions: number;
+    reviewedQuestions: number;
+    currentIndex: number;
+    knownCount: number;
+    fuzzyCount: number;
+    unknownCount: number;
+    startedAt: string;
+    completeSession: boolean;
+  },
+): Promise<{
+  progress: ReciteProgressRecord;
+  session: ReciteSessionProgress | null;
+  summary: ReciteSessionSummary | null;
+}> {
+  const now = new Date().toISOString();
+  let result:
+    | {
+        progress: ReciteProgressRecord;
+        session: ReciteSessionProgress | null;
+        summary: ReciteSessionSummary | null;
+      }
+    | null = null;
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    const existing = await txn.getFirstAsync<ReciteProgressRow>(
+      `
+        SELECT
+          question_id,
+          bank_id,
+          mastery_level,
+          review_count,
+          last_result,
+          updated_at
+        FROM recite_progress
+        WHERE question_id = ?
+      `,
+      input.questionId,
+    );
+
+    const nextMasteryLevel = computeNextMasteryLevel(
+      existing?.mastery_level ?? 0,
+      input.feedback,
+    );
+    const nextReviewCount = (existing?.review_count ?? 0) + 1;
+
+    await txn.runAsync(
+      `
+        INSERT INTO recite_progress (
+          question_id,
+          bank_id,
+          mastery_level,
+          review_count,
+          last_result,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(question_id) DO UPDATE SET
+          bank_id = excluded.bank_id,
+          mastery_level = excluded.mastery_level,
+          review_count = excluded.review_count,
+          last_result = excluded.last_result,
+          updated_at = excluded.updated_at
+      `,
+      input.questionId,
+      input.bank.id,
+      nextMasteryLevel,
+      nextReviewCount,
+      input.feedback,
+      now,
+    );
+
+    const progress = {
+      questionId: input.questionId,
+      bankId: input.bank.id,
+      masteryLevel: nextMasteryLevel,
+      reviewCount: nextReviewCount,
+      lastResult: input.feedback,
+      updatedAt: now,
+    };
+    const questionIds = await loadSessionQuestionIds(txn, 'recite_session_items', input.sessionId);
+
+    if (input.completeSession) {
+      await txn.runAsync(
+        `
+          UPDATE recite_sessions
+          SET
+            bank_name_snapshot = ?,
+            total_questions = ?,
+            reviewed_questions = ?,
+            current_index = ?,
+            known_count = ?,
+            fuzzy_count = ?,
+            unknown_count = ?,
+            started_at = ?,
+            completed_at = ?,
+            status = 'completed',
+            updated_at = ?
+          WHERE id = ?
+        `,
+        input.bank.name,
+        input.totalQuestions,
+        input.reviewedQuestions,
+        input.totalQuestions,
+        input.knownCount,
+        input.fuzzyCount,
+        input.unknownCount,
+        input.startedAt,
+        now,
+        now,
+        input.sessionId,
+      );
+
+      result = {
+        progress,
+        session: null,
+        summary: {
+          id: input.sessionId,
+          bankId: input.bank.id,
+          bankName: input.bank.name,
+          totalQuestions: input.totalQuestions,
+          reviewedQuestions: input.reviewedQuestions,
+          knownCount: input.knownCount,
+          fuzzyCount: input.fuzzyCount,
+          unknownCount: input.unknownCount,
+          startedAt: input.startedAt,
+          completedAt: now,
+        },
+      };
+      return;
+    }
+
+    await txn.runAsync(
+      `
+        UPDATE recite_sessions
+        SET
+          bank_name_snapshot = ?,
+          total_questions = ?,
+          reviewed_questions = ?,
+          current_index = ?,
+          known_count = ?,
+          fuzzy_count = ?,
+          unknown_count = ?,
+          started_at = ?,
+          completed_at = '',
+          status = 'in_progress',
+          updated_at = ?
+        WHERE id = ?
+      `,
+      input.bank.name,
+      input.totalQuestions,
+      input.reviewedQuestions,
+      input.currentIndex,
+      input.knownCount,
+      input.fuzzyCount,
+      input.unknownCount,
+      input.startedAt,
+      now,
+      input.sessionId,
+    );
+
+    result = {
+      progress,
+      session: {
+        id: input.sessionId,
+        bankId: input.bank.id,
+        bankName: input.bank.name,
+        totalQuestions: input.totalQuestions,
+        reviewedQuestions: input.reviewedQuestions,
+        currentIndex: input.currentIndex,
+        questionIds,
+        knownCount: input.knownCount,
+        fuzzyCount: input.fuzzyCount,
+        unknownCount: input.unknownCount,
+        startedAt: input.startedAt,
+        updatedAt: now,
+      },
+      summary: null,
+    };
+  });
+
+  if (!result) {
+    throw new Error('背诵进度保存失败。');
+  }
+
+  return result;
+}
+
 export async function saveReciteSessionProgress(
   db: SQLiteDatabase,
   input: {
@@ -866,6 +1087,61 @@ function safeParseJson<T>(value: string, fallback: T): T {
   }
 }
 
+async function listTableColumns(db: SQLiteDatabase, tableName: string) {
+  const rows = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${tableName})`);
+  return rows.map((row) => row.name);
+}
+
+async function loadSessionQuestionIds(
+  db: SQLiteExecutor,
+  tableName: 'quiz_session_items' | 'recite_session_items',
+  sessionId: string,
+) {
+  const rows = await db.getAllAsync<{ question_id: string }>(
+    `
+      SELECT
+        question_id
+      FROM ${tableName}
+      WHERE session_id = ?
+      ORDER BY sort_order ASC
+    `,
+    sessionId,
+  );
+
+  return rows.map((row) => row.question_id);
+}
+
+async function insertSessionItems(
+  db: SQLiteExecutor,
+  tableName: 'quiz_session_items' | 'recite_session_items',
+  sessionId: string,
+  questionIds: string[],
+) {
+  const statement = await db.prepareAsync(`
+    INSERT INTO ${tableName} (
+      session_id,
+      question_id,
+      sort_order
+    ) VALUES (
+      $sessionId,
+      $questionId,
+      $sortOrder
+    )
+  `);
+
+  try {
+    for (const [index, questionId] of questionIds.entries()) {
+      await statement.executeAsync({
+        $sessionId: sessionId,
+        $questionId: questionId,
+        $sortOrder: index + 1,
+      });
+    }
+  } finally {
+    await statement.finalizeAsync();
+  }
+}
+
 function createId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -967,6 +1243,22 @@ async function createQuizSessionSchema(db: SQLiteDatabase) {
   `);
 }
 
+async function createQuizSessionItemSchema(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS quiz_session_items (
+      session_id TEXT NOT NULL,
+      question_id TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (session_id, question_id),
+      FOREIGN KEY (session_id) REFERENCES quiz_sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_quiz_session_items_session_sort
+      ON quiz_session_items(session_id, sort_order ASC);
+  `);
+}
+
 async function createReciteSchema(db: SQLiteDatabase) {
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS recite_progress (
@@ -1022,10 +1314,21 @@ async function createReciteSessionItemSchema(db: SQLiteDatabase) {
 }
 
 async function upgradeQuizSessionSchemaV3(db: SQLiteDatabase) {
-  await db.execAsync(`
-    ALTER TABLE quiz_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
-    ALTER TABLE quiz_sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+  const columns = await listTableColumns(db, 'quiz_sessions');
 
+  if (!columns.includes('status')) {
+    await db.execAsync(`
+      ALTER TABLE quiz_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'completed';
+    `);
+  }
+
+  if (!columns.includes('updated_at')) {
+    await db.execAsync(`
+      ALTER TABLE quiz_sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+    `);
+  }
+
+  await db.execAsync(`
     UPDATE quiz_sessions
     SET
       status = 'completed',
@@ -1038,6 +1341,63 @@ async function upgradeQuizSessionSchemaV3(db: SQLiteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_quiz_sessions_bank_status_updated
       ON quiz_sessions(bank_id, status, updated_at DESC);
   `);
+}
+
+async function upgradeSessionSchemaV6(db: SQLiteDatabase) {
+  await createQuizSessionItemSchema(db);
+  await createReciteSessionItemSchema(db);
+  await backfillMissingSessionItems(db, 'quiz_session_items', 'quiz_sessions');
+  await backfillMissingSessionItems(db, 'recite_session_items', 'recite_sessions');
+}
+
+async function backfillMissingSessionItems(
+  db: SQLiteDatabase,
+  itemTableName: 'quiz_session_items' | 'recite_session_items',
+  sessionTableName: 'quiz_sessions' | 'recite_sessions',
+) {
+  const sessions = await db.getAllAsync<{ id: string; bank_id: string }>(
+    `
+      SELECT
+        id,
+        bank_id
+      FROM ${sessionTableName}
+      WHERE status = 'in_progress'
+    `,
+  );
+
+  for (const session of sessions) {
+    const existingQuestionIds = await loadSessionQuestionIds(db, itemTableName, session.id);
+
+    if (existingQuestionIds.length > 0) {
+      continue;
+    }
+
+    const questionRows = await db.getAllAsync<{ id: string }>(
+      `
+        SELECT
+          id
+        FROM questions
+        WHERE bank_id = ?
+        ORDER BY sort_order ASC, source_row ASC
+      `,
+      session.bank_id,
+    );
+    const questionIds = questionRows.map((row) => row.id);
+
+    if (questionIds.length === 0) {
+      continue;
+    }
+
+    await db.withExclusiveTransactionAsync(async (txn) => {
+      const reloadedQuestionIds = await loadSessionQuestionIds(txn, itemTableName, session.id);
+
+      if (reloadedQuestionIds.length > 0) {
+        return;
+      }
+
+      await insertSessionItems(txn, itemTableName, session.id, questionIds);
+    });
+  }
 }
 
 async function persistQuizSessionState(
