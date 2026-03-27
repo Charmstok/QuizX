@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { TabBar } from './src/components/TabBar';
 import { listQuestionBanks, migrateDbIfNeeded, saveImportPreview } from './src/db/quizDb';
 import { pickAndParseLocalExcel } from './src/importer/localExcelImport';
+import { BankDetailScreen } from './src/screens/BankDetailScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
 import { QuizModeScreen } from './src/screens/QuizModeScreen';
@@ -25,6 +26,7 @@ function AppShell() {
   const db = useSQLiteContext();
   const [activeTab, setActiveTab] = useState<StudyTab>('home');
   const [banks, setBanks] = useState<QuestionBank[]>([]);
+  const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -90,6 +92,14 @@ function AppShell() {
     }
   };
 
+  const handleChangeTab = (tab: StudyTab) => {
+    setActiveTab(tab);
+
+    if (tab !== 'home') {
+      setSelectedBank(null);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
@@ -104,13 +114,18 @@ function AppShell() {
               onCancel={() => setPreview(null)}
             />
           ) : activeTab === 'home' ? (
-            <HomeScreen
-              banks={banks}
-              totalQuestions={totalQuestions}
-              isImporting={Boolean(busyLabel)}
-              onOpenTab={setActiveTab}
-              onImportLocal={handleImportLocal}
-            />
+            selectedBank ? (
+              <BankDetailScreen bank={selectedBank} onBack={() => setSelectedBank(null)} />
+            ) : (
+              <HomeScreen
+                banks={banks}
+                totalQuestions={totalQuestions}
+                isImporting={Boolean(busyLabel)}
+                onOpenTab={handleChangeTab}
+                onOpenBankDetail={setSelectedBank}
+                onImportLocal={handleImportLocal}
+              />
+            )
           ) : activeTab === 'quiz' ? (
             <QuizModeScreen banks={banks} />
           ) : activeTab === 'recite' ? (
@@ -120,7 +135,7 @@ function AppShell() {
           )}
         </View>
 
-        {!preview ? <TabBar activeTab={activeTab} onChange={setActiveTab} /> : null}
+        {!preview ? <TabBar activeTab={activeTab} onChange={handleChangeTab} /> : null}
 
         {busyLabel || isRefreshing ? (
           <View style={styles.overlay}>

@@ -11,6 +11,7 @@ type HomeScreenProps = {
   totalQuestions: number;
   isImporting: boolean;
   onOpenTab: (tab: StudyTab) => void;
+  onOpenBankDetail: (bank: QuestionBank) => void;
   onImportLocal: () => void;
 };
 
@@ -19,6 +20,7 @@ export function HomeScreen({
   totalQuestions,
   isImporting,
   onOpenTab,
+  onOpenBankDetail,
   onImportLocal,
 }: HomeScreenProps) {
   const handleImport = (source: 'local' | 'wechat') => {
@@ -109,13 +111,17 @@ export function HomeScreen({
       <View style={styles.sectionGap}>
         <SectionTitle
           title="题库概览"
-          subtitle="这里已经从 SQLite 读取题库摘要。如果数据库还是空的，先通过上面的本地导入走一遍。"
+          subtitle="这里已经从 SQLite 读取题库摘要。点击任意题库卡片，可以进入详情页浏览题目。"
         />
       </View>
       <View style={styles.bankList}>
         {banks.length > 0 ? (
           banks.map((bank) => (
-            <View key={bank.id} style={styles.bankCard}>
+            <Pressable
+              key={bank.id}
+              onPress={() => onOpenBankDetail(bank)}
+              style={({ pressed }) => [styles.bankCard, pressed && styles.pressed]}
+            >
               <View style={styles.bankHeader}>
                 <Text style={styles.bankName}>{bank.name}</Text>
                 <Text style={styles.bankSource}>{bank.source}</Text>
@@ -131,7 +137,8 @@ export function HomeScreen({
                   </View>
                 ))}
               </View>
-            </View>
+              <Text style={styles.bankAction}>查看题库详情</Text>
+            </Pressable>
           ))
         ) : (
           <View style={styles.emptyCard}>
@@ -153,9 +160,9 @@ export function HomeScreen({
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 完善题库详情页和题目浏览</Text>
-        <Text style={styles.tipText}>2. 增加重复导入处理与批量导入体验</Text>
-        <Text style={styles.tipText}>3. 后续再补微信来源和复习算法</Text>
+        <Text style={styles.tipText}>1. 增加重复导入处理与批量导入体验</Text>
+        <Text style={styles.tipText}>2. 后续再补微信来源和复习算法</Text>
+        <Text style={styles.tipText}>3. 继续完善题库检索与筛选能力</Text>
       </View>
     </ScrollView>
   );
@@ -264,6 +271,11 @@ const styles = StyleSheet.create({
   bankFile: {
     color: colors.textMuted,
     fontSize: 12,
+  },
+  bankAction: {
+    color: colors.brand,
+    fontSize: 14,
+    fontWeight: '700',
   },
   tagRow: {
     flexDirection: 'row',
