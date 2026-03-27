@@ -10,6 +10,7 @@ import {
   saveQuizSession,
   saveQuizSessionProgress,
 } from '../db/quizDb';
+import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { colors, radius, spacing } from '../theme';
 import type {
   QuestionBank,
@@ -44,6 +45,22 @@ export function QuizModeScreen({ banks }: QuizModeScreenProps) {
   const currentRecord = currentQuestion
     ? submittedAnswers.find((item) => item.questionId === currentQuestion.id) ?? null
     : null;
+
+  useAndroidBackHandler(
+    () => {
+      if (isLoading || isSyncingProgress || isSaving) {
+        return true;
+      }
+
+      if (activeBank || summary) {
+        handleChangeBank();
+        return true;
+      }
+
+      return false;
+    },
+    [activeBank, isLoading, isSaving, isSyncingProgress, summary],
+  );
 
   const handleStartBank = async (bank: QuestionBank) => {
     setIsLoading(true);

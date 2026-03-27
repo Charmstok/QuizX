@@ -10,6 +10,7 @@ import {
   listReciteProgressByBank,
   submitReciteFeedback,
 } from '../db/quizDb';
+import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { colors, radius, spacing } from '../theme';
 import type {
   QuestionBank,
@@ -44,6 +45,22 @@ export function ReciteModeScreen({ banks }: ReciteModeScreenProps) {
 
   const currentQuestion = questions[currentIndex] ?? null;
   const currentProgress = currentQuestion ? progressByQuestionId[currentQuestion.id] ?? null : null;
+
+  useAndroidBackHandler(
+    () => {
+      if (isLoading || isSaving) {
+        return true;
+      }
+
+      if (activeBank || summary) {
+        handleChangeBank();
+        return true;
+      }
+
+      return false;
+    },
+    [activeBank, isLoading, isSaving, summary],
+  );
 
   const handleStartBank = async (bank: QuestionBank) => {
     setIsLoading(true);

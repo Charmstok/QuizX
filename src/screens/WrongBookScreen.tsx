@@ -7,6 +7,7 @@ import {
   listWrongQuestionsByBank,
   saveWrongQuestionResult,
 } from '../db/quizDb';
+import { useAndroidBackHandler } from '../hooks/useAndroidBackHandler';
 import { colors, radius, spacing } from '../theme';
 import type {
   QuestionOption,
@@ -46,6 +47,22 @@ export function WrongBookScreen() {
     ? submittedAnswers.find((item) => item.questionId === currentQuestion.id) ?? null
     : null;
   const isBankListBusy = isRefreshingBanks || Boolean(startingBankId);
+
+  useAndroidBackHandler(
+    () => {
+      if (isRefreshingBanks || Boolean(startingBankId) || isSyncing) {
+        return true;
+      }
+
+      if (activeBank || summary) {
+        handleChangeBank();
+        return true;
+      }
+
+      return false;
+    },
+    [activeBank, isRefreshingBanks, isSyncing, startingBankId, summary],
+  );
 
   useEffect(() => {
     void refreshWrongBanks();

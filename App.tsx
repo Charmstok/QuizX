@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 
 import { TabBar } from './src/components/TabBar';
 import { listQuestionBanks, migrateDbIfNeeded, saveImportPreview } from './src/db/quizDb';
+import { useAndroidBackHandler } from './src/hooks/useAndroidBackHandler';
 import { pickAndParseLocalExcel } from './src/importer/localExcelImport';
 import { BankDetailScreen } from './src/screens/BankDetailScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -50,6 +51,33 @@ function AppShell() {
   useEffect(() => {
     void refreshBanks();
   }, []);
+
+  useAndroidBackHandler(
+    () => {
+      if (busyLabel) {
+        return true;
+      }
+
+      if (preview) {
+        setPreview(null);
+        return true;
+      }
+
+      if (activeTab === 'home' && selectedBank) {
+        setSelectedBank(null);
+        return true;
+      }
+
+      if (activeTab !== 'home') {
+        setActiveTab('home');
+        setSelectedBank(null);
+        return true;
+      }
+
+      return false;
+    },
+    [activeTab, busyLabel, preview, selectedBank],
+  );
 
   const handleImportLocal = async () => {
     setBusyLabel('正在读取本地 Excel...');
