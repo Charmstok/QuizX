@@ -6,18 +6,12 @@ import { listQuestionBanks, migrateDbIfNeeded, saveImportPreview } from './src/d
 import { pickAndParseLocalExcel } from './src/importer/localExcelImport';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
-import { PlaceholderScreen } from './src/screens/PlaceholderScreen';
 import { QuizModeScreen } from './src/screens/QuizModeScreen';
 import { ReciteModeScreen } from './src/screens/ReciteModeScreen';
+import { WrongBookScreen } from './src/screens/WrongBookScreen';
 import { colors, radius, spacing } from './src/theme';
 import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
-
-const WRONG_TAB_CONFIG = {
-  title: '错题本',
-  description: '后续会在这里接入错题筛选、重做和恢复掌握状态等功能。',
-  checklist: ['错题列表', '按题库筛选', '再次作答', '错题移出'],
-};
 
 export default function App() {
   return (
@@ -122,12 +116,7 @@ function AppShell() {
           ) : activeTab === 'recite' ? (
             <ReciteModeScreen banks={banks} />
           ) : (
-            <PlaceholderScreen
-              title={WRONG_TAB_CONFIG.title}
-              description={WRONG_TAB_CONFIG.description}
-              checklist={WRONG_TAB_CONFIG.checklist}
-              onBackHome={() => setActiveTab('home')}
-            />
+            <WrongBookScreen />
           )}
         </View>
 

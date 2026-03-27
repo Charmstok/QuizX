@@ -76,6 +76,31 @@ export type QuizSessionSummary = {
   completedAt: string;
 };
 
+export type WrongBankSummary = {
+  id: string;
+  name: string;
+  source: BankSource;
+  wrongCount: number;
+  updatedAt: string;
+  questionTypes: QuestionType[];
+  fileName?: string | null;
+};
+
+export type WrongQuestionRecord = QuizQuestion & {
+  wrongCount: number;
+  lastWrongAt: string;
+  lastSelectedAnswers: string[];
+};
+
+export type WrongPracticeSummary = {
+  bankId: string;
+  bankName: string;
+  totalQuestions: number;
+  correctedQuestions: number;
+  remainingQuestions: number;
+  completedAt: string;
+};
+
 export type QuizSessionProgress = {
   id: string;
   bankId: string;

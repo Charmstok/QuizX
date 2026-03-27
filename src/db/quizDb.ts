@@ -10,6 +10,8 @@ import type {
   ReciteProgressRecord,
   ReciteSessionProgress,
   ReciteSessionSummary,
+  WrongBankSummary,
+  WrongQuestionRecord,
   QuizAnswerRecord,
   QuizQuestion,
   QuizSessionProgress,
@@ -93,7 +95,16 @@ type ReciteSessionRow = {
   updated_at: string;
 };
 
-const DATABASE_VERSION = 6;
+type WrongQuestionRow = {
+  question_id: string;
+  bank_id: string;
+  wrong_count: number;
+  last_wrong_at: string;
+  last_selected_answers_json: string;
+  correct_answers_json: string;
+};
+
+const DATABASE_VERSION = 7;
 
 type ReciteSessionItemRow = {
   question_id: string;
@@ -135,6 +146,10 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
   if (currentVersion < 6) {
     await upgradeSessionSchemaV6(db);
+  }
+
+  if (currentVersion < 7) {
+    await createWrongQuestionSchema(db);
   }
 
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
@@ -331,6 +346,8 @@ export async function saveQuizSession(
     completedAt: now,
   });
 
+  await persistWrongQuestionsFromQuizAnswers(db, input.bank, input.answers);
+
   return {
     id: input.sessionId,
     bankId: input.bank.id,
@@ -342,6 +359,152 @@ export async function saveQuizSession(
     startedAt: input.startedAt,
     completedAt: now,
   };
+}
+
+export async function listWrongBanks(db: SQLiteDatabase): Promise<WrongBankSummary[]> {
+  const rows = await db.getAllAsync<
+    QuestionBankRow & {
+      wrong_count: number;
+    }
+  >(
+    `
+      SELECT
+        qb.id,
+        qb.name,
+        qb.source,
+        qb.file_name,
+        COUNT(wq.question_id) AS wrong_count,
+        qb.question_types_json,
+        MAX(wq.last_wrong_at) AS updated_at
+      FROM wrong_questions wq
+      INNER JOIN question_banks qb ON qb.id = wq.bank_id
+      GROUP BY
+        qb.id,
+        qb.name,
+        qb.source,
+        qb.file_name,
+        qb.question_types_json
+      ORDER BY datetime(updated_at) DESC, qb.name ASC
+    `,
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    source: row.source,
+    fileName: row.file_name,
+    wrongCount: row.wrong_count,
+    questionTypes: safeParseQuestionTypes(row.question_types_json),
+    updatedAt: formatLocalDate(row.updated_at),
+  }));
+}
+
+export async function listWrongQuestionsByBank(
+  db: SQLiteDatabase,
+  bankId: string,
+): Promise<WrongQuestionRecord[]> {
+  const rows = await db.getAllAsync<
+    QuestionRow &
+      WrongQuestionRow
+  >(
+    `
+      SELECT
+        q.id,
+        q.bank_id,
+        q.type,
+        q.stem,
+        q.options_json,
+        q.answers_json,
+        q.explanation,
+        q.source_sheet,
+        q.sort_order,
+        wq.question_id,
+        wq.bank_id,
+        wq.wrong_count,
+        wq.last_wrong_at,
+        wq.last_selected_answers_json,
+        wq.correct_answers_json
+      FROM wrong_questions wq
+      INNER JOIN questions q ON q.id = wq.question_id
+      WHERE wq.bank_id = ?
+      ORDER BY wq.wrong_count DESC, datetime(wq.last_wrong_at) DESC, q.sort_order ASC
+    `,
+    bankId,
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    bankId: row.bank_id,
+    type: row.type,
+    stem: row.stem,
+    options: safeParseJson(row.options_json, []),
+    answers: safeParseJson(row.answers_json, []),
+    explanation: row.explanation,
+    sourceSheet: row.source_sheet,
+    sortOrder: row.sort_order,
+    wrongCount: row.wrong_count,
+    lastWrongAt: row.last_wrong_at,
+    lastSelectedAnswers: safeParseJson(row.last_selected_answers_json, []),
+  }));
+}
+
+export async function saveWrongQuestionResult(
+  db: SQLiteDatabase,
+  input: {
+    bankId: string;
+    questionId: string;
+    selectedAnswers: string[];
+    correctAnswers: string[];
+    isCorrect: boolean;
+  },
+) {
+  if (input.isCorrect) {
+    await db.runAsync(`DELETE FROM wrong_questions WHERE question_id = ?`, input.questionId);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const existing = await db.getFirstAsync<WrongQuestionRow>(
+    `
+      SELECT
+        question_id,
+        bank_id,
+        wrong_count,
+        last_wrong_at,
+        last_selected_answers_json,
+        correct_answers_json
+      FROM wrong_questions
+      WHERE question_id = ?
+    `,
+    input.questionId,
+  );
+
+  const nextWrongCount = (existing?.wrong_count ?? 0) + 1;
+
+  await db.runAsync(
+    `
+      INSERT INTO wrong_questions (
+        question_id,
+        bank_id,
+        wrong_count,
+        last_wrong_at,
+        last_selected_answers_json,
+        correct_answers_json
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(question_id) DO UPDATE SET
+        bank_id = excluded.bank_id,
+        wrong_count = excluded.wrong_count,
+        last_wrong_at = excluded.last_wrong_at,
+        last_selected_answers_json = excluded.last_selected_answers_json,
+        correct_answers_json = excluded.correct_answers_json
+    `,
+    input.questionId,
+    input.bankId,
+    nextWrongCount,
+    now,
+    JSON.stringify(input.selectedAnswers),
+    JSON.stringify(input.correctAnswers),
+  );
 }
 
 export async function createQuizSession(
@@ -1313,6 +1476,27 @@ async function createReciteSessionItemSchema(db: SQLiteDatabase) {
   `);
 }
 
+async function createWrongQuestionSchema(db: SQLiteDatabase) {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS wrong_questions (
+      question_id TEXT PRIMARY KEY NOT NULL,
+      bank_id TEXT NOT NULL,
+      wrong_count INTEGER NOT NULL DEFAULT 0,
+      last_wrong_at TEXT NOT NULL,
+      last_selected_answers_json TEXT NOT NULL DEFAULT '[]',
+      correct_answers_json TEXT NOT NULL DEFAULT '[]',
+      FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE,
+      FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wrong_questions_bank_id
+      ON wrong_questions(bank_id);
+
+    CREATE INDEX IF NOT EXISTS idx_wrong_questions_bank_wrong_at
+      ON wrong_questions(bank_id, last_wrong_at DESC);
+  `);
+}
+
 async function upgradeQuizSessionSchemaV3(db: SQLiteDatabase) {
   const columns = await listTableColumns(db, 'quiz_sessions');
 
@@ -1485,6 +1669,82 @@ async function persistQuizSessionState(
       await statement.finalizeAsync();
     }
   });
+}
+
+async function persistWrongQuestionsFromQuizAnswers(
+  db: SQLiteDatabase,
+  bank: QuestionBank,
+  answers: QuizAnswerRecord[],
+) {
+  const wrongAnswers = answers.filter((item) => !item.isCorrect);
+
+  if (wrongAnswers.length === 0) {
+    return;
+  }
+
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    for (const answer of wrongAnswers) {
+      await upsertWrongQuestion(txn, {
+        bankId: bank.id,
+        questionId: answer.questionId,
+        selectedAnswers: answer.selectedAnswers,
+        correctAnswers: answer.correctAnswers,
+      });
+    }
+  });
+}
+
+async function upsertWrongQuestion(
+  db: SQLiteExecutor,
+  input: {
+    bankId: string;
+    questionId: string;
+    selectedAnswers: string[];
+    correctAnswers: string[];
+  },
+) {
+  const now = new Date().toISOString();
+  const existing = await db.getFirstAsync<WrongQuestionRow>(
+    `
+      SELECT
+        question_id,
+        bank_id,
+        wrong_count,
+        last_wrong_at,
+        last_selected_answers_json,
+        correct_answers_json
+      FROM wrong_questions
+      WHERE question_id = ?
+    `,
+    input.questionId,
+  );
+
+  const nextWrongCount = (existing?.wrong_count ?? 0) + 1;
+
+  await db.runAsync(
+    `
+      INSERT INTO wrong_questions (
+        question_id,
+        bank_id,
+        wrong_count,
+        last_wrong_at,
+        last_selected_answers_json,
+        correct_answers_json
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(question_id) DO UPDATE SET
+        bank_id = excluded.bank_id,
+        wrong_count = excluded.wrong_count,
+        last_wrong_at = excluded.last_wrong_at,
+        last_selected_answers_json = excluded.last_selected_answers_json,
+        correct_answers_json = excluded.correct_answers_json
+    `,
+    input.questionId,
+    input.bankId,
+    nextWrongCount,
+    now,
+    JSON.stringify(input.selectedAnswers),
+    JSON.stringify(input.correctAnswers),
+  );
 }
 
 function computeNextMasteryLevel(currentLevel: number, feedback: ReciteFeedback) {

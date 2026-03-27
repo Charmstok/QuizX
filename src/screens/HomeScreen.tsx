@@ -80,7 +80,7 @@ export function HomeScreen({
       </View>
 
       <View style={styles.sectionGap}>
-        <SectionTitle title="学习入口" subtitle="答题模式和背诵模式已经可用，错题本继续保留占位页。" />
+        <SectionTitle title="学习入口" subtitle="答题模式、背诵模式和错题本都已经可用。" />
       </View>
       <View style={styles.modeList}>
         <ModeCard
@@ -99,8 +99,8 @@ export function HomeScreen({
         />
         <ModeCard
           title="错题本"
-          description="集中回看做错的题目，后续会接入错题重做和移出逻辑。"
-          actionLabel="查看占位页"
+          description="按题库集中重做错题，答对后会从错题本移出，答错则继续保留。"
+          actionLabel="开始重做"
           accent={colors.warning}
           onPress={() => onOpenTab('wrong')}
         />
@@ -153,9 +153,9 @@ export function HomeScreen({
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 补错题本的最小可运行闭环</Text>
-        <Text style={styles.tipText}>2. 完善题库详情页和题目浏览</Text>
-        <Text style={styles.tipText}>3. 后续再补微信来源和批量导入体验</Text>
+        <Text style={styles.tipText}>1. 完善题库详情页和题目浏览</Text>
+        <Text style={styles.tipText}>2. 增加重复导入处理与批量导入体验</Text>
+        <Text style={styles.tipText}>3. 后续再补微信来源和复习算法</Text>
       </View>
     </ScrollView>
   );
