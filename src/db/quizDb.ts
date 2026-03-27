@@ -463,48 +463,12 @@ export async function saveWrongQuestionResult(
     return;
   }
 
-  const now = new Date().toISOString();
-  const existing = await db.getFirstAsync<WrongQuestionRow>(
-    `
-      SELECT
-        question_id,
-        bank_id,
-        wrong_count,
-        last_wrong_at,
-        last_selected_answers_json,
-        correct_answers_json
-      FROM wrong_questions
-      WHERE question_id = ?
-    `,
-    input.questionId,
-  );
-
-  const nextWrongCount = (existing?.wrong_count ?? 0) + 1;
-
-  await db.runAsync(
-    `
-      INSERT INTO wrong_questions (
-        question_id,
-        bank_id,
-        wrong_count,
-        last_wrong_at,
-        last_selected_answers_json,
-        correct_answers_json
-      ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(question_id) DO UPDATE SET
-        bank_id = excluded.bank_id,
-        wrong_count = excluded.wrong_count,
-        last_wrong_at = excluded.last_wrong_at,
-        last_selected_answers_json = excluded.last_selected_answers_json,
-        correct_answers_json = excluded.correct_answers_json
-    `,
-    input.questionId,
-    input.bankId,
-    nextWrongCount,
-    now,
-    JSON.stringify(input.selectedAnswers),
-    JSON.stringify(input.correctAnswers),
-  );
+  await upsertWrongQuestion(db, {
+    bankId: input.bankId,
+    questionId: input.questionId,
+    selectedAnswers: input.selectedAnswers,
+    correctAnswers: input.correctAnswers,
+  });
 }
 
 export async function createQuizSession(
@@ -1704,22 +1668,6 @@ async function upsertWrongQuestion(
   },
 ) {
   const now = new Date().toISOString();
-  const existing = await db.getFirstAsync<WrongQuestionRow>(
-    `
-      SELECT
-        question_id,
-        bank_id,
-        wrong_count,
-        last_wrong_at,
-        last_selected_answers_json,
-        correct_answers_json
-      FROM wrong_questions
-      WHERE question_id = ?
-    `,
-    input.questionId,
-  );
-
-  const nextWrongCount = (existing?.wrong_count ?? 0) + 1;
 
   await db.runAsync(
     `
@@ -1733,14 +1681,14 @@ async function upsertWrongQuestion(
       ) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(question_id) DO UPDATE SET
         bank_id = excluded.bank_id,
-        wrong_count = excluded.wrong_count,
+        wrong_count = COALESCE(wrong_questions.wrong_count, 0) + 1,
         last_wrong_at = excluded.last_wrong_at,
         last_selected_answers_json = excluded.last_selected_answers_json,
         correct_answers_json = excluded.correct_answers_json
     `,
     input.questionId,
     input.bankId,
-    nextWrongCount,
+    1,
     now,
     JSON.stringify(input.selectedAnswers),
     JSON.stringify(input.correctAnswers),

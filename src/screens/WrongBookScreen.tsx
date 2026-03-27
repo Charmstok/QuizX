@@ -37,20 +37,22 @@ export function WrongBookScreen() {
   const [draftTextAnswer, setDraftTextAnswer] = useState('');
   const [submittedAnswers, setSubmittedAnswers] = useState<WrongAnswerRecord[]>([]);
   const [summary, setSummary] = useState<WrongPracticeSummary | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshingBanks, setIsRefreshingBanks] = useState(true);
+  const [startingBankId, setStartingBankId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
   const currentQuestion = questions[currentIndex] ?? null;
   const currentRecord = currentQuestion
     ? submittedAnswers.find((item) => item.questionId === currentQuestion.id) ?? null
     : null;
+  const isBankListBusy = isRefreshingBanks || Boolean(startingBankId);
 
   useEffect(() => {
     void refreshWrongBanks();
   }, []);
 
   const refreshWrongBanks = async () => {
-    setIsLoading(true);
+    setIsRefreshingBanks(true);
 
     try {
       const nextBanks = await listWrongBanks(db);
@@ -59,12 +61,26 @@ export function WrongBookScreen() {
       const message = error instanceof Error ? error.message : '读取错题列表失败。';
       Alert.alert('读取错题本失败', message);
     } finally {
-      setIsLoading(false);
+      setIsRefreshingBanks(false);
     }
   };
 
+  const resetDraftState = () => {
+    setDraftAnswers([]);
+    setDraftTextAnswer('');
+  };
+
+  const resetPracticeState = () => {
+    setActiveBank(null);
+    setQuestions([]);
+    setCurrentIndex(0);
+    resetDraftState();
+    setSubmittedAnswers([]);
+    setSummary(null);
+  };
+
   const handleStartBank = async (bank: WrongBankSummary) => {
-    setIsLoading(true);
+    setStartingBankId(bank.id);
 
     try {
       const nextQuestions = await listWrongQuestionsByBank(db, bank.id);
@@ -78,26 +94,19 @@ export function WrongBookScreen() {
       setActiveBank(bank);
       setQuestions(nextQuestions);
       setCurrentIndex(0);
-      setDraftAnswers([]);
-      setDraftTextAnswer('');
+      resetDraftState();
       setSubmittedAnswers([]);
       setSummary(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : '读取错题失败。';
       Alert.alert('无法开始错题练习', message);
     } finally {
-      setIsLoading(false);
+      setStartingBankId((current) => (current === bank.id ? null : current));
     }
   };
 
   const handleChangeBank = () => {
-    setActiveBank(null);
-    setQuestions([]);
-    setCurrentIndex(0);
-    setDraftAnswers([]);
-    setDraftTextAnswer('');
-    setSubmittedAnswers([]);
-    setSummary(null);
+    resetPracticeState();
     void refreshWrongBanks();
   };
 
@@ -121,10 +130,10 @@ export function WrongBookScreen() {
       return;
     }
 
-    setDraftAnswers(
-      draftAnswers.includes(option.key)
-        ? draftAnswers.filter((item) => item !== option.key)
-        : [...draftAnswers, option.key],
+    setDraftAnswers((previous) =>
+      previous.includes(option.key)
+        ? previous.filter((item) => item !== option.key)
+        : [...previous, option.key],
     );
   };
 
@@ -180,8 +189,7 @@ export function WrongBookScreen() {
 
     if (currentIndex < questions.length - 1) {
       setCurrentIndex((previous) => previous + 1);
-      setDraftAnswers([]);
-      setDraftTextAnswer('');
+      resetDraftState();
       return;
     }
 
@@ -251,13 +259,23 @@ export function WrongBookScreen() {
         <View style={styles.actionGroup}>
           <Pressable
             onPress={handleRestartSameBank}
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            disabled={Boolean(startingBankId)}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (pressed || Boolean(startingBankId)) && styles.pressed,
+            ]}
           >
-            <Text style={styles.primaryButtonText}>再练一轮</Text>
+            <Text style={styles.primaryButtonText}>
+              {startingBankId === activeBank.id ? '加载中...' : '再练一轮'}
+            </Text>
           </Pressable>
           <Pressable
             onPress={handleChangeBank}
-            style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+            disabled={Boolean(startingBankId)}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              (pressed || Boolean(startingBankId)) && styles.pressed,
+            ]}
           >
             <Text style={styles.secondaryButtonText}>返回题库列表</Text>
           </Pressable>
@@ -277,10 +295,10 @@ export function WrongBookScreen() {
               <Pressable
                 key={bank.id}
                 onPress={() => void handleStartBank(bank)}
-                disabled={isLoading}
+                disabled={isBankListBusy}
                 style={({ pressed }) => [
                   styles.bankCard,
-                  (pressed || isLoading) && styles.pressed,
+                  (pressed || isRefreshingBanks || startingBankId === bank.id) && styles.pressed,
                 ]}
               >
                 <View style={styles.bankHeader}>
@@ -291,10 +309,19 @@ export function WrongBookScreen() {
                   {bank.wrongCount} 题待重做 · {bank.questionTypes.join(' / ')}
                 </Text>
                 <Text style={styles.bankAction}>
-                  {isLoading ? '加载中...' : '开始重做'}
+                  {startingBankId === bank.id
+                    ? '加载中...'
+                    : isRefreshingBanks
+                      ? '同步中...'
+                      : '开始重做'}
                 </Text>
               </Pressable>
             ))}
+          </View>
+        ) : isRefreshingBanks ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>正在加载错题</Text>
+            <Text style={styles.emptyText}>正在从 SQLite 同步当前错题列表。</Text>
           </View>
         ) : (
           <View style={styles.emptyCard}>
