@@ -2,9 +2,14 @@ import { ActivityIndicator, Alert, SafeAreaView, StatusBar, StyleSheet, Text, Vi
 import { useEffect, useState } from 'react';
 
 import { TabBar } from './src/components/TabBar';
-import { listQuestionBanks, migrateDbIfNeeded, saveImportPreview } from './src/db/quizDb';
+import {
+  annotateImportPreviewDuplicates,
+  listQuestionBanks,
+  migrateDbIfNeeded,
+  saveImportPreview,
+} from './src/db/quizDb';
 import { useAndroidBackHandler } from './src/hooks/useAndroidBackHandler';
-import { pickAndParseLocalExcel } from './src/importer/localExcelImport';
+import { pickAndParseLocalExcelBatch } from './src/importer/localExcelImport';
 import { BankDetailScreen } from './src/screens/BankDetailScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
@@ -28,10 +33,16 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState<StudyTab>('home');
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [importQueue, setImportQueue] = useState<ImportPreview[]>([]);
+  const [importBatchProgress, setImportBatchProgress] = useState<{
+    total: number;
+    imported: number;
+    skipped: number;
+  } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
 
+  const preview = importQueue[0] ?? null;
   const totalQuestions = banks.reduce((sum, bank) => sum + bank.questionCount, 0);
 
   const refreshBanks = async () => {
@@ -59,7 +70,7 @@ function AppShell() {
       }
 
       if (preview) {
-        setPreview(null);
+        clearImportQueue();
         return true;
       }
 
@@ -83,13 +94,31 @@ function AppShell() {
     setBusyLabel('正在读取本地 Excel...');
 
     try {
-      const nextPreview = await pickAndParseLocalExcel();
+      const batchResult = await pickAndParseLocalExcelBatch();
 
-      if (!nextPreview) {
+      if (!batchResult) {
         return;
       }
 
-      setPreview(nextPreview);
+      const nextQueue = await hydrateImportQueue(batchResult.previews);
+
+      if (nextQueue.length > 0) {
+        setImportQueue(nextQueue);
+        setImportBatchProgress({
+          total: nextQueue.length,
+          imported: 0,
+          skipped: 0,
+        });
+        setActiveTab('home');
+        setSelectedBank(null);
+      }
+
+      if (batchResult.failures.length > 0) {
+        Alert.alert(
+          nextQueue.length > 0 ? '部分文件未加入导入队列' : '导入失败',
+          formatBatchFailures(batchResult.failures),
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '文件解析失败，请确认选择的是可读取的 Excel。';
@@ -104,14 +133,22 @@ function AppShell() {
       return;
     }
 
+    if (preview.duplicateSummary.exactMatchedBank) {
+      handleSkipCurrentPreview();
+      return;
+    }
+
     setBusyLabel('正在写入 SQLite...');
 
     try {
       const savedBank = await saveImportPreview(db, preview);
       await refreshBanks();
-      setPreview(null);
-      setActiveTab('home');
-      Alert.alert('导入完成', `题库“${savedBank.name}”已写入 SQLite，共 ${savedBank.questionCount} 题。`);
+      await advanceImportQueue({
+        importedDelta: 1,
+        skippedDelta: 0,
+        importedBankName: savedBank.name,
+        importedQuestionCount: savedBank.questionCount,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : '题库写入失败。';
       Alert.alert('导入失败', message);
@@ -128,6 +165,85 @@ function AppShell() {
     }
   };
 
+  function clearImportQueue() {
+    setImportQueue([]);
+    setImportBatchProgress(null);
+  }
+
+  async function hydrateImportQueue(previews: ImportPreview[]) {
+    const nextQueue: ImportPreview[] = [];
+
+    for (const item of previews) {
+      nextQueue.push(await annotateImportPreviewDuplicates(db, item));
+    }
+
+    return nextQueue;
+  }
+
+  async function advanceImportQueue({
+    importedDelta,
+    skippedDelta,
+    importedBankName,
+    importedQuestionCount,
+    skipReason,
+  }: {
+    importedDelta: number;
+    skippedDelta: number;
+    importedBankName?: string;
+    importedQuestionCount?: number;
+    skipReason?: 'duplicate' | 'manual';
+  }) {
+    const remainingQueue = importQueue.slice(1);
+    const hydratedQueue = await hydrateImportQueue(remainingQueue);
+    const nextProgress = {
+      total: importBatchProgress?.total ?? importQueue.length,
+      imported: (importBatchProgress?.imported ?? 0) + importedDelta,
+      skipped: (importBatchProgress?.skipped ?? 0) + skippedDelta,
+    };
+
+    setImportQueue(hydratedQueue);
+
+    if (hydratedQueue.length > 0) {
+      setImportBatchProgress(nextProgress);
+      return;
+    }
+
+    clearImportQueue();
+    setActiveTab('home');
+
+    if (nextProgress.total > 1) {
+      Alert.alert(
+        '批量导入完成',
+        `共处理 ${nextProgress.total} 个文件，导入 ${nextProgress.imported} 个题库，跳过 ${nextProgress.skipped} 个文件。`,
+      );
+      return;
+    }
+
+    if (importedBankName && importedQuestionCount !== undefined) {
+      Alert.alert('导入完成', `题库“${importedBankName}”已写入 SQLite，共 ${importedQuestionCount} 题。`);
+      return;
+    }
+
+    Alert.alert(
+      skipReason === 'duplicate' ? '已跳过重复文件' : '已跳过当前文件',
+      skipReason === 'duplicate'
+        ? '当前文件与已有题库内容完全一致，默认没有再次入库。'
+        : '当前文件没有写入 SQLite，已返回题库首页。',
+    );
+  }
+
+  function handleSkipCurrentPreview() {
+    if (!preview) {
+      return;
+    }
+
+    void advanceImportQueue({
+      importedDelta: 0,
+      skippedDelta: 1,
+      skipReason: preview.duplicateSummary.exactMatchedBank ? 'duplicate' : 'manual',
+    });
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
@@ -137,9 +253,12 @@ function AppShell() {
             <ImportPreviewScreen
               preview={preview}
               isSaving={busyLabel === '正在写入 SQLite...'}
+              currentIndex={(importBatchProgress?.imported ?? 0) + (importBatchProgress?.skipped ?? 0) + 1}
+              totalCount={importBatchProgress?.total ?? importQueue.length}
               onConfirm={handleConfirmImport}
               onRepick={handleImportLocal}
-              onCancel={() => setPreview(null)}
+              onSkipCurrent={handleSkipCurrentPreview}
+              onCancelBatch={clearImportQueue}
             />
           ) : activeTab === 'home' ? (
             selectedBank ? (
@@ -178,6 +297,18 @@ function AppShell() {
       </View>
     </SafeAreaView>
   );
+}
+
+function formatBatchFailures(
+  failures: {
+    fileName: string;
+    message: string;
+  }[],
+) {
+  return failures
+    .slice(0, 3)
+    .map((failure) => `${failure.fileName}：${failure.message}`)
+    .join('\n');
 }
 
 const styles = StyleSheet.create({

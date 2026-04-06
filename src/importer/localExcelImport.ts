@@ -5,6 +5,8 @@ import {
   STANDARD_IMPORT_SHEETS,
 } from './importTemplate';
 import type {
+  ImportBatchResult,
+  ImportDuplicateSummary,
   ImportPreview,
   ImportQuestionRow,
   QuestionOption,
@@ -47,10 +49,10 @@ const QUESTION_TYPE_MAP: Record<string, QuestionType> = {
 const JUDGEMENT_TRUE_VALUES = new Set(['a', '对', '是', '正确', '√', 'true', '1', 'yes']);
 const JUDGEMENT_FALSE_VALUES = new Set(['b', '错', '否', '错误', '×', 'false', '0', 'no']);
 
-export async function pickAndParseLocalExcel(): Promise<ImportPreview | null> {
+export async function pickAndParseLocalExcelBatch(): Promise<ImportBatchResult | null> {
   const result = await getDocumentAsync({
     type: EXCEL_MIME_TYPES as unknown as string[],
-    multiple: false,
+    multiple: true,
     copyToCacheDirectory: true,
   });
 
@@ -58,15 +60,33 @@ export async function pickAndParseLocalExcel(): Promise<ImportPreview | null> {
     return null;
   }
 
-  const asset = result.assets[0];
-  const file = new File(asset);
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = read(arrayBuffer, { type: 'array' });
+  const previews: ImportPreview[] = [];
+  const failures: ImportBatchResult['failures'] = [];
 
-  return buildImportPreview({
-    fileName: asset.name,
-    workbook,
-  });
+  for (const asset of result.assets) {
+    try {
+      const file = new File(asset);
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = read(arrayBuffer, { type: 'array' });
+
+      previews.push(
+        buildImportPreview({
+          fileName: asset.name,
+          workbook,
+        }),
+      );
+    } catch (error) {
+      failures.push({
+        fileName: asset.name,
+        message: error instanceof Error ? error.message : '文件解析失败。',
+      });
+    }
+  }
+
+  return {
+    previews,
+    failures,
+  };
 }
 
 export function buildImportPreview({
@@ -146,6 +166,12 @@ export function buildImportPreview({
           answers,
           options,
         }),
+        fingerprint: createQuestionFingerprint({
+          type,
+          stem,
+          options,
+          answers,
+        }),
       });
     }
   }
@@ -163,6 +189,8 @@ export function buildImportPreview({
     workbookWarnings.push(`未检测到这些标准工作表：${missingSheets.join('、')}。`);
   }
 
+  applyInFileDuplicateWarnings(rows);
+
   return {
     bankName,
     source: '本地 Excel',
@@ -171,15 +199,34 @@ export function buildImportPreview({
     standardColumns: [...STANDARD_IMPORT_COLUMNS],
     workbookWarnings,
     rows,
+    duplicateSummary: createEmptyDuplicateSummary(),
   };
 }
 
 export function isImportRowValid(row: ImportQuestionRow) {
-  return row.errors.length === 0 && row.type !== null;
+  return row.errors.length === 0 && row.type !== null && row.fingerprint !== null;
+}
+
+export function getImportableRows(preview: ImportPreview) {
+  const seenFingerprints = new Set<string>();
+
+  return preview.rows.filter((row) => {
+    if (!isImportRowValid(row) || !row.fingerprint) {
+      return false;
+    }
+
+    if (seenFingerprints.has(row.fingerprint)) {
+      return false;
+    }
+
+    seenFingerprints.add(row.fingerprint);
+    return true;
+  });
 }
 
 export function getImportPreviewStats(preview: ImportPreview) {
   const validRows = preview.rows.filter(isImportRowValid);
+  const importableRows = getImportableRows(preview);
   const questionTypes = Array.from(
     new Set(
       validRows
@@ -192,6 +239,8 @@ export function getImportPreviewStats(preview: ImportPreview) {
     totalRows: preview.rows.length,
     validCount: validRows.length,
     invalidCount: preview.rows.length - validRows.length,
+    duplicateRowsInFile: validRows.length - importableRows.length,
+    importableCount: importableRows.length,
     questionTypes,
     sheetCount: preview.sheetNames.length,
   };
@@ -212,6 +261,56 @@ export function formatAnswerSummary(row: ImportQuestionRow) {
       return option ? `${option.key}. ${option.text}` : answer;
     })
     .join(' / ');
+}
+
+export function createQuestionFingerprint({
+  type,
+  stem,
+  options,
+  answers,
+}: {
+  type: QuestionType | null;
+  stem: string;
+  options: QuestionOption[];
+  answers: string[];
+}) {
+  if (!type) {
+    return null;
+  }
+
+  const normalizedStem = normalizeFingerprintText(stem);
+
+  if (!normalizedStem) {
+    return null;
+  }
+
+  const optionTextMap = new Map(
+    options.map((option) => [option.key, normalizeFingerprintText(option.text)]),
+  );
+
+  const normalizedOptions = options
+    .map((option) => normalizeFingerprintText(option.text))
+    .filter(Boolean)
+    .sort();
+
+  const normalizedAnswers =
+    type === '判断'
+      ? answers.map((answer) => (answer === 'A' ? '正确' : answer === 'B' ? '错误' : answer))
+      : type === '填空'
+        ? answers
+        : answers.map((answer) => optionTextMap.get(answer) ?? answer);
+
+  const stableAnswers = normalizedAnswers
+    .map((answer) => normalizeFingerprintText(answer))
+    .filter(Boolean)
+    .sort();
+
+  return JSON.stringify({
+    type,
+    stem: normalizedStem,
+    options: normalizedOptions,
+    answers: stableAnswers,
+  });
 }
 
 function normalizeRecord(row: RawSheetRow) {
@@ -244,6 +343,10 @@ function stringifyCell(value: unknown) {
   }
 
   return String(value).trim();
+}
+
+function normalizeFingerprintText(value: string) {
+  return value.trim().replace(/\s+/g, '').toLowerCase();
 }
 
 function isEmptyRecord(record: Record<string, string>) {
@@ -446,4 +549,37 @@ function getMissingHeaders(headers: string[]) {
   return STANDARD_IMPORT_COLUMNS.filter(
     (header) => !normalizedHeaders.has(normalizeHeader(header)),
   );
+}
+
+function createEmptyDuplicateSummary(): ImportDuplicateSummary {
+  return {
+    sameNameBankCount: 0,
+    sameFileNameBankCount: 0,
+    duplicateRowsInFile: 0,
+    matchedExistingQuestionCount: 0,
+    importableQuestionCount: 0,
+    exactMatchedBank: null,
+    matchedBanks: [],
+  };
+}
+
+function applyInFileDuplicateWarnings(rows: ImportQuestionRow[]) {
+  const firstRowByFingerprint = new Map<string, ImportQuestionRow>();
+
+  for (const row of rows) {
+    if (!isImportRowValid(row) || !row.fingerprint) {
+      continue;
+    }
+
+    const firstRow = firstRowByFingerprint.get(row.fingerprint);
+
+    if (!firstRow) {
+      firstRowByFingerprint.set(row.fingerprint, row);
+      continue;
+    }
+
+    row.warnings.push(
+      `与 ${firstRow.sheetName} 第 ${firstRow.rowNumber} 行题目重复，入库时只保留首条。`,
+    );
+  }
 }

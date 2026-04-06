@@ -1,10 +1,13 @@
 import {
+  createQuestionFingerprint,
   getImportPreviewStats,
-  isImportRowValid,
+  getImportableRows,
 } from '../importer/localExcelImport';
 import type {
+  ImportDuplicateBankMatch,
   ImportPreview,
   QuestionBank,
+  QuestionOption,
   QuestionType,
   ReciteFeedback,
   ReciteProgressRecord,
@@ -41,6 +44,7 @@ type QuestionRow = {
   explanation: string;
   source_sheet: string;
   sort_order: number;
+  question_fingerprint: string;
 };
 
 type QuizSessionRow = {
@@ -104,7 +108,12 @@ type WrongQuestionRow = {
   correct_answers_json: string;
 };
 
-const DATABASE_VERSION = 7;
+type QuestionFingerprintRow = {
+  bank_id: string;
+  question_fingerprint: string;
+};
+
+const DATABASE_VERSION = 8;
 
 type ReciteSessionItemRow = {
   question_id: string;
@@ -152,6 +161,10 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
     await createWrongQuestionSchema(db);
   }
 
+  if (currentVersion < 8) {
+    await upgradeQuestionFingerprintSchemaV8(db);
+  }
+
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
 }
 
@@ -180,14 +193,157 @@ export async function listQuestionBanks(db: SQLiteDatabase): Promise<QuestionBan
   }));
 }
 
+export async function annotateImportPreviewDuplicates(
+  db: SQLiteDatabase,
+  preview: ImportPreview,
+): Promise<ImportPreview> {
+  const stats = getImportPreviewStats(preview);
+  const importableRows = getImportableRows(preview);
+  const importFingerprints = Array.from(
+    new Set(
+      importableRows
+        .map((row) => row.fingerprint)
+        .filter((fingerprint): fingerprint is string => Boolean(fingerprint)),
+    ),
+  );
+
+  const existingBanks = await db.getAllAsync<QuestionBankRow>(
+    `
+      SELECT
+        id,
+        name,
+        source,
+        file_name,
+        question_count,
+        question_types_json,
+        updated_at
+      FROM question_banks
+    `,
+  );
+
+  const sameNameBankCount = existingBanks.filter((bank) => bank.name === preview.bankName).length;
+  const sameFileNameBankCount = existingBanks.filter(
+    (bank) => bank.file_name && bank.file_name === preview.fileName,
+  ).length;
+
+  if (importFingerprints.length === 0) {
+    return {
+      ...preview,
+      duplicateSummary: {
+        sameNameBankCount,
+        sameFileNameBankCount,
+        duplicateRowsInFile: stats.duplicateRowsInFile,
+        matchedExistingQuestionCount: 0,
+        importableQuestionCount: importableRows.length,
+        exactMatchedBank: null,
+        matchedBanks: [],
+      },
+    };
+  }
+
+  const placeholders = importFingerprints.map(() => '?').join(', ');
+  const matchedRows = await db.getAllAsync<
+    QuestionFingerprintRow &
+      Pick<QuestionBankRow, 'name' | 'file_name' | 'question_count'>
+  >(
+    `
+      SELECT
+        q.bank_id,
+        q.question_fingerprint,
+        qb.name,
+        qb.file_name,
+        qb.question_count
+      FROM questions q
+      INNER JOIN question_banks qb ON qb.id = q.bank_id
+      WHERE q.question_fingerprint IN (${placeholders})
+      GROUP BY q.bank_id, q.question_fingerprint
+    `,
+    ...importFingerprints,
+  );
+
+  const matchedFingerprintSet = new Set(matchedRows.map((row) => row.question_fingerprint));
+  const matchMap = new Map<
+    string,
+    {
+      bankId: string;
+      bankName: string;
+      questionCount: number;
+      sameName: boolean;
+      sameFileName: boolean;
+      matchedFingerprints: Set<string>;
+    }
+  >();
+
+  for (const row of matchedRows) {
+    const existing = matchMap.get(row.bank_id);
+
+    if (existing) {
+      existing.matchedFingerprints.add(row.question_fingerprint);
+      continue;
+    }
+
+    matchMap.set(row.bank_id, {
+      bankId: row.bank_id,
+      bankName: row.name,
+      questionCount: row.question_count,
+      sameName: row.name === preview.bankName,
+      sameFileName: row.file_name === preview.fileName,
+      matchedFingerprints: new Set([row.question_fingerprint]),
+    });
+  }
+
+  const matchedBanks: ImportDuplicateBankMatch[] = Array.from(matchMap.values())
+    .map((match) => ({
+      bankId: match.bankId,
+      bankName: match.bankName,
+      questionCount: match.questionCount,
+      matchedQuestionCount: match.matchedFingerprints.size,
+      sameName: match.sameName,
+      sameFileName: match.sameFileName,
+      isExactMatch:
+        match.matchedFingerprints.size === importFingerprints.length &&
+        match.questionCount === importableRows.length,
+    }))
+    .sort((left, right) => {
+      if (left.isExactMatch !== right.isExactMatch) {
+        return left.isExactMatch ? -1 : 1;
+      }
+
+      if (left.matchedQuestionCount !== right.matchedQuestionCount) {
+        return right.matchedQuestionCount - left.matchedQuestionCount;
+      }
+
+      return left.bankName.localeCompare(right.bankName, 'zh-Hans-CN');
+    });
+
+  return {
+    ...preview,
+    duplicateSummary: {
+      sameNameBankCount,
+      sameFileNameBankCount,
+      duplicateRowsInFile: stats.duplicateRowsInFile,
+      matchedExistingQuestionCount: matchedFingerprintSet.size,
+      importableQuestionCount: importableRows.length,
+      exactMatchedBank: matchedBanks.find((bank) => bank.isExactMatch) ?? null,
+      matchedBanks,
+    },
+  };
+}
+
 export async function saveImportPreview(
   db: SQLiteDatabase,
   preview: ImportPreview,
 ): Promise<QuestionBank> {
-  const validRows = preview.rows.filter(isImportRowValid);
+  const importableRows = getImportableRows(preview);
 
-  if (validRows.length === 0) {
+  if (importableRows.length === 0) {
     throw new Error('当前预览中没有可导入的题目。');
+  }
+
+  if (preview.duplicateSummary.exactMatchedBank) {
+    throw new Error(
+      `当前文件与题库“${preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，默认不再重复入库。`,
+    );
   }
 
   const stats = getImportPreviewStats(preview);
@@ -214,7 +370,7 @@ export async function saveImportPreview(
       preview.bankName,
       preview.source,
       preview.fileName,
-      validRows.length,
+      importableRows.length,
       questionTypesJson,
       IMPORT_TEMPLATE_VERSION,
       now,
@@ -234,6 +390,7 @@ export async function saveImportPreview(
         source_sheet,
         source_row,
         sort_order,
+        question_fingerprint,
         created_at,
         updated_at
       ) VALUES (
@@ -248,13 +405,14 @@ export async function saveImportPreview(
         $sourceSheet,
         $sourceRow,
         $sortOrder,
+        $questionFingerprint,
         $createdAt,
         $updatedAt
       )
     `);
 
     try {
-      for (const [index, row] of validRows.entries()) {
+      for (const [index, row] of importableRows.entries()) {
         await statement.executeAsync({
           $id: createId('question'),
           $bankId: bankId,
@@ -267,6 +425,7 @@ export async function saveImportPreview(
           $sourceSheet: row.sheetName,
           $sourceRow: row.rowNumber,
           $sortOrder: index + 1,
+          $questionFingerprint: row.fingerprint,
           $createdAt: now,
           $updatedAt: now,
         });
@@ -281,7 +440,7 @@ export async function saveImportPreview(
     name: preview.bankName,
     source: preview.source,
     fileName: preview.fileName,
-    questionCount: validRows.length,
+    questionCount: importableRows.length,
     questionTypes: stats.questionTypes,
     updatedAt: formatLocalDate(now),
   };
@@ -1313,6 +1472,7 @@ async function createQuestionSchema(db: SQLiteDatabase) {
       source_sheet TEXT NOT NULL DEFAULT '',
       source_row INTEGER NOT NULL,
       sort_order INTEGER NOT NULL,
+      question_fingerprint TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (bank_id) REFERENCES question_banks(id) ON DELETE CASCADE
@@ -1326,6 +1486,12 @@ async function createQuestionSchema(db: SQLiteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_questions_bank_sort
       ON questions(bank_id, sort_order);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_fingerprint
+      ON questions(question_fingerprint);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_fingerprint
+      ON questions(bank_id, question_fingerprint);
   `);
 }
 
@@ -1498,6 +1664,27 @@ async function upgradeSessionSchemaV6(db: SQLiteDatabase) {
   await backfillMissingSessionItems(db, 'recite_session_items', 'recite_sessions');
 }
 
+async function upgradeQuestionFingerprintSchemaV8(db: SQLiteDatabase) {
+  const columns = await listTableColumns(db, 'questions');
+
+  if (!columns.includes('question_fingerprint')) {
+    await db.execAsync(`
+      ALTER TABLE questions
+      ADD COLUMN question_fingerprint TEXT NOT NULL DEFAULT '';
+    `);
+  }
+
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_questions_fingerprint
+      ON questions(question_fingerprint);
+
+    CREATE INDEX IF NOT EXISTS idx_questions_bank_fingerprint
+      ON questions(bank_id, question_fingerprint);
+  `);
+
+  await backfillExistingQuestionFingerprints(db);
+}
+
 async function backfillMissingSessionItems(
   db: SQLiteDatabase,
   itemTableName: 'quiz_session_items' | 'recite_session_items',
@@ -1545,6 +1732,53 @@ async function backfillMissingSessionItems(
 
       await insertSessionItems(txn, itemTableName, session.id, questionIds);
     });
+  }
+}
+
+async function backfillExistingQuestionFingerprints(db: SQLiteDatabase) {
+  const rows = await db.getAllAsync<
+    Pick<QuestionRow, 'id' | 'type' | 'stem' | 'options_json' | 'answers_json' | 'question_fingerprint'>
+  >(
+    `
+      SELECT
+        id,
+        type,
+        stem,
+        options_json,
+        answers_json,
+        question_fingerprint
+      FROM questions
+      WHERE question_fingerprint = ''
+    `,
+  );
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const statement = await db.prepareAsync(`
+    UPDATE questions
+    SET question_fingerprint = $questionFingerprint
+    WHERE id = $id
+  `);
+
+  try {
+    for (const row of rows) {
+      const fingerprint =
+        createQuestionFingerprint({
+          type: row.type,
+          stem: row.stem,
+          options: safeParseJson<QuestionOption[]>(row.options_json, []),
+          answers: safeParseJson<string[]>(row.answers_json, []),
+        }) ?? '';
+
+      await statement.executeAsync({
+        $id: row.id,
+        $questionFingerprint: fingerprint,
+      });
+    }
+  } finally {
+    await statement.finalizeAsync();
   }
 }
 

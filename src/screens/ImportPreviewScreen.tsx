@@ -12,22 +12,44 @@ import { SectionTitle } from '../components/SectionTitle';
 type ImportPreviewScreenProps = {
   preview: ImportPreview;
   isSaving: boolean;
+  currentIndex: number;
+  totalCount: number;
   onConfirm: () => void;
   onRepick: () => void;
-  onCancel: () => void;
+  onSkipCurrent: () => void;
+  onCancelBatch: () => void;
 };
 
 export function ImportPreviewScreen({
   preview,
   isSaving,
+  currentIndex,
+  totalCount,
   onConfirm,
   onRepick,
-  onCancel,
+  onSkipCurrent,
+  onCancelBatch,
 }: ImportPreviewScreenProps) {
   const stats = getImportPreviewStats(preview);
   const visibleRows = preview.rows.slice(0, 8);
   const invalidRows = preview.rows.filter((row) => !isImportRowValid(row));
-  const canConfirm = stats.validCount > 0 && stats.invalidCount === 0 && !isSaving;
+  const hasExactDuplicate = Boolean(preview.duplicateSummary.exactMatchedBank);
+  const hasMoreFiles = totalCount > 1;
+  const canImport = stats.importableCount > 0 && stats.invalidCount === 0 && !isSaving;
+  const primaryLabel = hasExactDuplicate
+    ? hasMoreFiles
+      ? '跳过这个重复文件'
+      : '跳过并返回首页'
+    : isSaving
+      ? '写入 SQLite 中...'
+      : hasMoreFiles
+        ? '导入当前并继续下一个'
+        : '确认导入到 SQLite';
+  const shouldShowDuplicatePanel =
+    preview.duplicateSummary.sameNameBankCount > 0 ||
+    preview.duplicateSummary.sameFileNameBankCount > 0 ||
+    preview.duplicateSummary.duplicateRowsInFile > 0 ||
+    preview.duplicateSummary.matchedExistingQuestionCount > 0;
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -36,6 +58,15 @@ export function ImportPreviewScreen({
         title={preview.bankName}
         subtitle={`文件 ${preview.fileName} 已完成解析。现在先确认标准化结果，再决定是否写入 SQLite。`}
       />
+
+      {totalCount > 1 ? (
+        <View style={styles.batchCard}>
+          <Text style={styles.batchTitle}>批量导入队列</Text>
+          <Text style={styles.batchText}>
+            当前第 {currentIndex} / {totalCount} 个文件，剩余 {totalCount - currentIndex} 个待处理。
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.heroCard}>
         <View style={styles.heroHeader}>
@@ -57,12 +88,16 @@ export function ImportPreviewScreen({
 
         <View style={styles.metricRow}>
           <View style={[styles.metricCard, styles.metricCardSuccess]}>
-            <Text style={styles.metricLabel}>可导入</Text>
-            <Text style={styles.metricValue}>{stats.validCount}</Text>
+            <Text style={styles.metricLabel}>预计入库</Text>
+            <Text style={styles.metricValue}>{stats.importableCount}</Text>
           </View>
           <View style={[styles.metricCard, styles.metricCardDanger]}>
             <Text style={styles.metricLabel}>需修正</Text>
             <Text style={styles.metricValue}>{stats.invalidCount}</Text>
+          </View>
+          <View style={[styles.metricCard, styles.metricCardWarning]}>
+            <Text style={styles.metricLabel}>文件内重复</Text>
+            <Text style={styles.metricValue}>{stats.duplicateRowsInFile}</Text>
           </View>
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>总题数</Text>
@@ -91,6 +126,48 @@ export function ImportPreviewScreen({
           {preview.workbookWarnings.map((warning) => (
             <Text key={warning} style={styles.warningText}>
               {warning}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {shouldShowDuplicatePanel ? (
+        <View
+          style={[
+            styles.panel,
+            hasExactDuplicate ? styles.duplicatePanelDanger : styles.duplicatePanel,
+          ]}
+        >
+          <Text style={styles.duplicateTitle}>重复导入提示</Text>
+          {preview.duplicateSummary.sameNameBankCount > 0 ? (
+            <Text style={styles.duplicateText}>
+              已有 {preview.duplicateSummary.sameNameBankCount} 个题库名称相同。这只作为提示，不代表题目内容相同。
+            </Text>
+          ) : null}
+          {preview.duplicateSummary.sameFileNameBankCount > 0 ? (
+            <Text style={styles.duplicateText}>
+              已有 {preview.duplicateSummary.sameFileNameBankCount} 个来源文件同名。这只作为提示，不会直接判定为重复题库。
+            </Text>
+          ) : null}
+          {preview.duplicateSummary.duplicateRowsInFile > 0 ? (
+            <Text style={styles.duplicateText}>
+              当前文件内检测到 {preview.duplicateSummary.duplicateRowsInFile} 道重复题，入库时只保留首条。
+            </Text>
+          ) : null}
+          {preview.duplicateSummary.matchedExistingQuestionCount > 0 ? (
+            <Text style={styles.duplicateText}>
+              有 {preview.duplicateSummary.matchedExistingQuestionCount} 道题与已存在题库内容重复。
+            </Text>
+          ) : null}
+          {preview.duplicateSummary.exactMatchedBank ? (
+            <Text style={styles.duplicateStrongText}>
+              当前文件与题库“{preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，默认跳过，不再重复入库。
+            </Text>
+          ) : null}
+          {preview.duplicateSummary.matchedBanks.slice(0, 3).map((bank) => (
+            <Text key={bank.bankId} style={styles.duplicateBankText}>
+              {bank.bankName} · 命中 {bank.matchedQuestionCount} / {preview.duplicateSummary.importableQuestionCount}
+              {bank.isExactMatch ? ' · 完全一致' : ''}
             </Text>
           ))}
         </View>
@@ -178,18 +255,29 @@ export function ImportPreviewScreen({
 
       <View style={styles.actionGroup}>
         <Pressable
-          onPress={onConfirm}
-          disabled={!canConfirm}
+          onPress={hasExactDuplicate ? onSkipCurrent : onConfirm}
+          disabled={hasExactDuplicate ? isSaving : !canImport}
           style={({ pressed }) => [
             styles.primaryButton,
-            (pressed || !canConfirm) && styles.buttonPressed,
-            !canConfirm && styles.buttonDisabled,
+            (pressed || (hasExactDuplicate ? isSaving : !canImport)) && styles.buttonPressed,
+            (hasExactDuplicate ? isSaving : !canImport) && styles.buttonDisabled,
           ]}
         >
-          <Text style={styles.primaryButtonText}>
-            {isSaving ? '写入 SQLite 中...' : '确认导入到 SQLite'}
-          </Text>
+          <Text style={styles.primaryButtonText}>{primaryLabel}</Text>
         </Pressable>
+
+        {hasMoreFiles && !hasExactDuplicate ? (
+          <Pressable
+            onPress={onSkipCurrent}
+            disabled={isSaving}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              (pressed || isSaving) && styles.buttonPressed,
+            ]}
+          >
+            <Text style={styles.secondaryButtonText}>跳过当前文件</Text>
+          </Pressable>
+        ) : null}
 
         <Pressable
           onPress={onRepick}
@@ -203,11 +291,13 @@ export function ImportPreviewScreen({
         </Pressable>
 
         <Pressable
-          onPress={onCancel}
+          onPress={onCancelBatch}
           disabled={isSaving}
           style={({ pressed }) => [styles.ghostButton, (pressed || isSaving) && styles.buttonPressed]}
         >
-          <Text style={styles.ghostButtonText}>先返回首页</Text>
+          <Text style={styles.ghostButtonText}>
+            {hasMoreFiles ? '结束这轮批量导入' : '先返回首页'}
+          </Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -266,6 +356,9 @@ const styles = StyleSheet.create({
   metricCardDanger: {
     backgroundColor: colors.dangerSoft,
   },
+  metricCardWarning: {
+    backgroundColor: colors.warningSoft,
+  },
   metricLabel: {
     color: colors.textSecondary,
     fontSize: 12,
@@ -291,6 +384,24 @@ const styles = StyleSheet.create({
   },
   panelDescription: {
     color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  batchCard: {
+    backgroundColor: colors.brandSoft,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    gap: spacing.xs,
+  },
+  batchTitle: {
+    color: colors.brand,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  batchText: {
+    color: colors.textPrimary,
     fontSize: 14,
     lineHeight: 22,
   },
@@ -322,6 +433,33 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
     lineHeight: 21,
+  },
+  duplicatePanel: {
+    backgroundColor: colors.warningSoft,
+  },
+  duplicatePanelDanger: {
+    backgroundColor: colors.dangerSoft,
+  },
+  duplicateTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  duplicateText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 22,
+  },
+  duplicateStrongText: {
+    color: colors.danger,
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  duplicateBankText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 20,
   },
   errorPanel: {
     backgroundColor: colors.dangerSoft,

@@ -40,14 +40,14 @@ export function HomeScreen({
       <SectionTitle
         eyebrow="QuizX MVP"
         title="把题库装进口袋里"
-        subtitle="当前版本已经开始接真实数据流：本地 Excel 走系统文件选择器，先标准化预览，再写入 SQLite。题型先固定为判断、单选、多选、填空。"
+        subtitle="当前版本已经开始接真实数据流：本地 Excel 支持批量选择，先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
       />
 
       <View style={styles.heroCard}>
         <View style={styles.heroText}>
           <Text style={styles.heroTitle}>先导入，再落 SQLite</Text>
           <Text style={styles.heroDescription}>
-            系统会把 Excel 行数据统一映射成标准题目结构，先做导入预览，再确认写入本地数据库。
+            系统会把 Excel 行数据统一映射成标准题目结构，支持一次选择多个文件，并在预览阶段提示同名题库、同名文件和内容重复情况。
           </Text>
         </View>
         <View style={styles.heroActions}>
@@ -156,6 +156,7 @@ export function HomeScreen({
         <Text style={styles.tipText}>2. 标准表头：题干 / 选项 / 答案 / 难度 / 题型 / 试题解析</Text>
         <Text style={styles.tipText}>3. 题库名默认取 Excel 文件名</Text>
         <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
+        <Text style={styles.tipText}>5. 同名文件只作提示，是否重复以题目内容为准</Text>
       </View>
 
       <View style={styles.planCard}>

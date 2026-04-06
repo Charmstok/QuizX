@@ -19,6 +19,26 @@ export type QuestionBank = {
   fileName?: string | null;
 };
 
+export type ImportDuplicateBankMatch = {
+  bankId: string;
+  bankName: string;
+  questionCount: number;
+  matchedQuestionCount: number;
+  sameName: boolean;
+  sameFileName: boolean;
+  isExactMatch: boolean;
+};
+
+export type ImportDuplicateSummary = {
+  sameNameBankCount: number;
+  sameFileNameBankCount: number;
+  duplicateRowsInFile: number;
+  matchedExistingQuestionCount: number;
+  importableQuestionCount: number;
+  exactMatchedBank: ImportDuplicateBankMatch | null;
+  matchedBanks: ImportDuplicateBankMatch[];
+};
+
 export type ImportQuestionRow = {
   id: string;
   sheetName: string;
@@ -31,6 +51,7 @@ export type ImportQuestionRow = {
   tags: string[];
   errors: string[];
   warnings: string[];
+  fingerprint: string | null;
 };
 
 export type ImportPreview = {
@@ -41,6 +62,17 @@ export type ImportPreview = {
   standardColumns: string[];
   workbookWarnings: string[];
   rows: ImportQuestionRow[];
+  duplicateSummary: ImportDuplicateSummary;
+};
+
+export type ImportBatchFailure = {
+  fileName: string;
+  message: string;
+};
+
+export type ImportBatchResult = {
+  previews: ImportPreview[];
+  failures: ImportBatchFailure[];
 };
 
 export type QuizQuestion = {
