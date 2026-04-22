@@ -126,7 +126,7 @@ export function ImportPreviewScreen({
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>统一导入格式</Text>
         <Text style={styles.panelDescription}>
-          当前只支持这一种标准模板，不再兼容旧版列名。非空工作表需要包含这些固定表头。
+          标准模板仍然是首选。当前同时兼容一类无表头旧格式工作表，会按工作表名称回退识别题型并解析题目。
         </Text>
         <View style={styles.tagRow}>
           {preview.standardColumns.map((column) => (

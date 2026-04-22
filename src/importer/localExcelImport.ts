@@ -111,82 +111,58 @@ export function buildImportPreview({
   const rows: ImportQuestionRow[] = [];
   const nonEmptySheets: string[] = [];
   const workbookWarnings: string[] = [];
+  const compatibleSheetTypes = new Set<QuestionType>();
 
   for (const sheetName of workbook.SheetNames) {
     const worksheet = workbook.Sheets[sheetName];
-    const sheetRows = utils.sheet_to_json<RawSheetRow>(worksheet, {
+    const sheetRows = utils.sheet_to_json<unknown[]>(worksheet, {
+      header: 1,
       defval: '',
       raw: false,
       blankrows: true,
     });
+    const normalizedSheetRows = sheetRows.map((row) => normalizeCellRow(row ?? []));
+    const firstNonEmptyRowIndex = normalizedSheetRows.findIndex((row) => !isEmptyCellRow(row));
 
-    if (sheetRows.length === 0) {
+    if (firstNonEmptyRowIndex === -1) {
       continue;
     }
 
     nonEmptySheets.push(sheetName);
+    const detectedSheetType = normalizeQuestionType(sheetName);
 
-    const headers = Object.keys(sheetRows[0] ?? {});
+    if (detectedSheetType) {
+      compatibleSheetTypes.add(detectedSheetType);
+    }
+    const headers = normalizedSheetRows[firstNonEmptyRowIndex] ?? [];
     const missingHeaders = getMissingHeaders(headers);
 
-    if (missingHeaders.length > 0) {
+    if (missingHeaders.length === 0) {
+      rows.push(
+        ...buildRowsFromStandardSheet({
+          sheetName,
+          sheetRows: normalizedSheetRows,
+          headerRowIndex: firstNonEmptyRowIndex,
+        }),
+      );
+      continue;
+    }
+
+    const legacyRows = buildRowsFromLegacySheet({
+      sheetName,
+      sheetRows: normalizedSheetRows,
+    });
+
+    if (!legacyRows) {
       throw new Error(
         `工作表“${sheetName}”表头不符合标准导入格式，缺少列：${missingHeaders.join('、')}。`,
       );
     }
 
-    for (const [index, rawRow] of sheetRows.entries()) {
-      const normalizedRecord = normalizeRecord(rawRow);
-
-      if (isEmptyRecord(normalizedRecord)) {
-        continue;
-      }
-
-      const rowNumber = index + 2;
-      const rowId = `${sheetName}-${rowNumber}`;
-      const type =
-        normalizeQuestionType(getField(normalizedRecord, '题型')) ??
-        normalizeQuestionType(sheetName);
-      const stem = getField(normalizedRecord, '题干');
-      const explanation = getField(normalizedRecord, '试题解析');
-      const rawAnswer = getField(normalizedRecord, '答案');
-      const options = type === '判断' ? createJudgementOptions() : collectOptions(normalizedRecord);
-      const answers = normalizeAnswers({
-        type,
-        rawAnswer,
-        options,
-      });
-
-      rows.push({
-        id: rowId,
-        sheetName,
-        rowNumber,
-        type,
-        stem,
-        options,
-        answers,
-        explanation,
-        tags: [],
-        errors: validateRow({
-          type,
-          stem,
-          options,
-          answers,
-        }),
-        warnings: collectWarnings({
-          type,
-          answers,
-          options,
-        }),
-        fingerprint: createQuestionFingerprint({
-          type,
-          stem,
-          options,
-          answers,
-          explanation,
-        }),
-      });
-    }
+    workbookWarnings.push(
+      `工作表“${sheetName}”未使用标准表头，已按兼容旧格式导入。建议后续迁移到标准模板。`,
+    );
+    rows.push(...legacyRows);
   }
 
   if (rows.length === 0) {
@@ -195,7 +171,14 @@ export function buildImportPreview({
 
   const bankName = stripExtension(fileName);
   const missingSheets = STANDARD_IMPORT_SHEETS.filter(
-    (sheetName) => !workbook.SheetNames.includes(sheetName),
+    (sheetName) => {
+      const normalizedType = normalizeQuestionType(sheetName);
+
+      return (
+        !workbook.SheetNames.includes(sheetName) &&
+        !(normalizedType && compatibleSheetTypes.has(normalizedType))
+      );
+    },
   );
 
   if (missingSheets.length > 0) {
@@ -213,6 +196,175 @@ export function buildImportPreview({
     workbookWarnings,
     rows,
     duplicateSummary: createEmptyDuplicateSummary(),
+  };
+}
+
+function buildRowsFromStandardSheet({
+  sheetName,
+  sheetRows,
+  headerRowIndex,
+}: {
+  sheetName: string;
+  sheetRows: string[][];
+  headerRowIndex: number;
+}) {
+  const rows: ImportQuestionRow[] = [];
+  const headers = sheetRows[headerRowIndex] ?? [];
+
+  for (let index = headerRowIndex + 1; index < sheetRows.length; index += 1) {
+    const rawRecord = Object.fromEntries(
+      headers.map((header, columnIndex) => [header, sheetRows[index]?.[columnIndex] ?? '']),
+    ) as RawSheetRow;
+    const normalizedRecord = normalizeRecord(rawRecord);
+
+    if (isEmptyRecord(normalizedRecord)) {
+      continue;
+    }
+
+    rows.push(
+      createImportRow({
+        sheetName,
+        rowNumber: index + 1,
+        type:
+          normalizeQuestionType(getField(normalizedRecord, '题型')) ??
+          normalizeQuestionType(sheetName),
+        stem: getField(normalizedRecord, '题干'),
+        rawOptions: getField(normalizedRecord, '选项'),
+        rawAnswer: getField(normalizedRecord, '答案'),
+        explanation: getField(normalizedRecord, '试题解析'),
+      }),
+    );
+  }
+
+  return rows;
+}
+
+function buildRowsFromLegacySheet({
+  sheetName,
+  sheetRows,
+}: {
+  sheetName: string;
+  sheetRows: string[][];
+}) {
+  const type = normalizeQuestionType(sheetName);
+
+  if (!type) {
+    return null;
+  }
+
+  const rows: ImportQuestionRow[] = [];
+
+  for (const [index, row] of sheetRows.entries()) {
+    if (isEmptyCellRow(row) || looksLikeLegacyHeaderRow(row)) {
+      continue;
+    }
+
+    const cells = trimTrailingEmptyCells(row);
+    const legacyFields = extractLegacyFields(type, cells);
+
+    if (!legacyFields) {
+      return null;
+    }
+
+    rows.push(
+      createImportRow({
+        sheetName,
+        rowNumber: index + 1,
+        type,
+        stem: legacyFields.stem,
+        rawOptions: legacyFields.rawOptions,
+        rawAnswer: legacyFields.rawAnswer,
+        explanation: '',
+      }),
+    );
+  }
+
+  return rows.length > 0 ? rows : null;
+}
+
+function extractLegacyFields(
+  type: QuestionType,
+  cells: string[],
+): {
+  stem: string;
+  rawOptions: string;
+  rawAnswer: string;
+} | null {
+  if (type === '判断' || type === '填空') {
+    if (cells.length < 2) {
+      return null;
+    }
+
+    return {
+      stem: cells.at(-2) ?? '',
+      rawOptions: '',
+      rawAnswer: cells.at(-1) ?? '',
+    };
+  }
+
+  if (cells.length < 3) {
+    return null;
+  }
+
+  return {
+    stem: cells.at(-3) ?? '',
+    rawOptions: cells.at(-2) ?? '',
+    rawAnswer: cells.at(-1) ?? '',
+  };
+}
+
+function createImportRow({
+  sheetName,
+  rowNumber,
+  type,
+  stem,
+  rawOptions,
+  rawAnswer,
+  explanation,
+}: {
+  sheetName: string;
+  rowNumber: number;
+  type: QuestionType | null;
+  stem: string;
+  rawOptions: string;
+  rawAnswer: string;
+  explanation: string;
+}): ImportQuestionRow {
+  const options = type === '判断' ? createJudgementOptions() : collectOptionsFromText(rawOptions);
+  const answers = normalizeAnswers({
+    type,
+    rawAnswer,
+    options,
+  });
+
+  return {
+    id: `${sheetName}-${rowNumber}`,
+    sheetName,
+    rowNumber,
+    type,
+    stem,
+    options,
+    answers,
+    explanation,
+    tags: [],
+    errors: validateRow({
+      type,
+      stem,
+      options,
+      answers,
+    }),
+    warnings: collectWarnings({
+      type,
+      answers,
+      options,
+    }),
+    fingerprint: createQuestionFingerprint({
+      type,
+      stem,
+      options,
+      answers,
+      explanation,
+    }),
   };
 }
 
@@ -353,6 +505,10 @@ function normalizeHeader(value: string) {
   return value.trim().replace(/\s+/g, '').replace(/[_-]+/g, '').toLowerCase();
 }
 
+function normalizeCellRow(row: unknown[]) {
+  return row.map((value) => stringifyCell(value));
+}
+
 function stringifyCell(value: unknown) {
   if (value === null || value === undefined) {
     return '';
@@ -363,6 +519,26 @@ function stringifyCell(value: unknown) {
 
 function normalizeFingerprintText(value: string) {
   return value.trim().replace(/\s+/g, '').toLowerCase();
+}
+
+function isEmptyCellRow(row: string[]) {
+  return row.every((value) => value === '');
+}
+
+function trimTrailingEmptyCells(row: string[]) {
+  const trimmed = [...row];
+
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1] === '') {
+    trimmed.pop();
+  }
+
+  return trimmed;
+}
+
+function looksLikeLegacyHeaderRow(row: string[]) {
+  const compactRow = trimTrailingEmptyCells(row);
+
+  return compactRow.some((cell) => /题干|题目/.test(cell)) && compactRow.some((cell) => cell === '答案');
 }
 
 function isEmptyRecord(record: Record<string, string>) {
@@ -380,8 +556,10 @@ function normalizeQuestionType(value: string): QuestionType | null {
 }
 
 function collectOptions(record: Record<string, string>) {
-  const rawOptions = getField(record, '选项');
+  return collectOptionsFromText(getField(record, '选项'));
+}
 
+function collectOptionsFromText(rawOptions: string) {
   if (!rawOptions) {
     return [];
   }

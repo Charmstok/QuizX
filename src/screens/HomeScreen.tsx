@@ -157,6 +157,7 @@ export function HomeScreen({
         <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
         <Text style={styles.tipText}>5. 同名文件只作提示，是否重复以题目内容为准</Text>
         <Text style={styles.tipText}>6. 微信导入同样要求使用这套标准模板</Text>
+        <Text style={styles.tipText}>7. 旧格式无表头工作表也会按题型兼容解析</Text>
       </View>
 
       <View style={styles.planCard}>
