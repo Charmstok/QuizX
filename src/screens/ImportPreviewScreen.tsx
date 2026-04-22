@@ -33,6 +33,7 @@ export function ImportPreviewScreen({
   const stats = getImportPreviewStats(preview);
   const visibleRows = preview.rows.slice(0, 8);
   const invalidRows = preview.rows.filter((row) => !isImportRowValid(row));
+  const isWeChatImport = preview.source === '微信 Excel';
   const hasExactDuplicate = Boolean(preview.duplicateSummary.exactMatchedBank);
   const hasMoreFiles = totalCount > 1;
   const canImport = stats.importableCount > 0 && stats.invalidCount === 0 && !isSaving;
@@ -50,13 +51,20 @@ export function ImportPreviewScreen({
     preview.duplicateSummary.sameFileNameBankCount > 0 ||
     preview.duplicateSummary.duplicateRowsInFile > 0 ||
     preview.duplicateSummary.matchedExistingQuestionCount > 0;
+  const repickLabel = isWeChatImport
+    ? hasMoreFiles
+      ? '重新从微信选择并重建队列'
+      : '重新从微信选择'
+    : hasMoreFiles
+      ? '重新选择并重建队列'
+      : '重新选择文件';
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionTitle
         eyebrow="导入预览"
         title={preview.bankName}
-        subtitle={`文件 ${preview.fileName} 已完成解析。现在先确认标准化结果，再决定是否写入 SQLite。`}
+        subtitle={`文件 ${preview.fileName} 已按 ${preview.source} 流程完成解析。现在先确认标准化结果，再决定是否写入 SQLite。`}
       />
 
       {totalCount > 1 ? (
@@ -64,6 +72,15 @@ export function ImportPreviewScreen({
           <Text style={styles.batchTitle}>批量导入队列</Text>
           <Text style={styles.batchText}>
             当前第 {currentIndex} / {totalCount} 个文件，剩余 {totalCount - currentIndex} 个待处理。
+          </Text>
+        </View>
+      ) : null}
+
+      {isWeChatImport ? (
+        <View style={[styles.panel, styles.wechatPanel]}>
+          <Text style={styles.wechatTitle}>微信导入说明</Text>
+          <Text style={styles.wechatText}>
+            当前流程适用于从微信聊天、群文件或文件传输助手中导出的 Excel。后续仍会按同一套标准模板校验并写入 SQLite。
           </Text>
         </View>
       ) : null}
@@ -287,7 +304,7 @@ export function ImportPreviewScreen({
             (pressed || isSaving) && styles.buttonPressed,
           ]}
         >
-          <Text style={styles.secondaryButtonText}>重新选择文件</Text>
+          <Text style={styles.secondaryButtonText}>{repickLabel}</Text>
         </Pressable>
 
         <Pressable
@@ -423,6 +440,19 @@ const styles = StyleSheet.create({
   },
   warningPanel: {
     backgroundColor: colors.warningSoft,
+  },
+  wechatPanel: {
+    backgroundColor: colors.brandSoft,
+  },
+  wechatTitle: {
+    color: colors.brand,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  wechatText: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 22,
   },
   warningTitle: {
     color: colors.warning,

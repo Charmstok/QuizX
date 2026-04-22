@@ -5,6 +5,7 @@ import {
   STANDARD_IMPORT_SHEETS,
 } from './importTemplate';
 import type {
+  BankSource,
   ImportBatchResult,
   ImportDuplicateSummary,
   ImportPreview,
@@ -50,6 +51,14 @@ const JUDGEMENT_TRUE_VALUES = new Set(['a', '对', '是', '正确', '√', 'true
 const JUDGEMENT_FALSE_VALUES = new Set(['b', '错', '否', '错误', '×', 'false', '0', 'no']);
 
 export async function pickAndParseLocalExcelBatch(): Promise<ImportBatchResult | null> {
+  return pickAndParseExcelBatch('本地 Excel');
+}
+
+export async function pickAndParseWeChatExcelBatch(): Promise<ImportBatchResult | null> {
+  return pickAndParseExcelBatch('微信 Excel');
+}
+
+async function pickAndParseExcelBatch(source: BankSource): Promise<ImportBatchResult | null> {
   const result = await getDocumentAsync({
     type: EXCEL_MIME_TYPES as unknown as string[],
     multiple: true,
@@ -71,6 +80,7 @@ export async function pickAndParseLocalExcelBatch(): Promise<ImportBatchResult |
 
       previews.push(
         buildImportPreview({
+          source,
           fileName: asset.name,
           workbook,
         }),
@@ -90,9 +100,11 @@ export async function pickAndParseLocalExcelBatch(): Promise<ImportBatchResult |
 }
 
 export function buildImportPreview({
+  source,
   fileName,
   workbook,
 }: {
+  source: BankSource;
   fileName: string;
   workbook: WorkBook;
 }): ImportPreview {
@@ -171,6 +183,7 @@ export function buildImportPreview({
           stem,
           options,
           answers,
+          explanation,
         }),
       });
     }
@@ -193,7 +206,7 @@ export function buildImportPreview({
 
   return {
     bankName,
-    source: '本地 Excel',
+    source,
     fileName,
     sheetNames: nonEmptySheets,
     standardColumns: [...STANDARD_IMPORT_COLUMNS],
@@ -268,11 +281,13 @@ export function createQuestionFingerprint({
   stem,
   options,
   answers,
+  explanation,
 }: {
   type: QuestionType | null;
   stem: string;
   options: QuestionOption[];
   answers: string[];
+  explanation?: string;
 }) {
   if (!type) {
     return null;
@@ -310,6 +325,7 @@ export function createQuestionFingerprint({
     stem: normalizedStem,
     options: normalizedOptions,
     answers: stableAnswers,
+    explanation: normalizeFingerprintText(explanation ?? ''),
   });
 }
 

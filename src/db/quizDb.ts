@@ -113,7 +113,7 @@ type QuestionFingerprintRow = {
   question_fingerprint: string;
 };
 
-const DATABASE_VERSION = 8;
+const DATABASE_VERSION = 9;
 
 type ReciteSessionItemRow = {
   question_id: string;
@@ -163,6 +163,10 @@ export async function migrateDbIfNeeded(db: SQLiteDatabase) {
 
   if (currentVersion < 8) {
     await upgradeQuestionFingerprintSchemaV8(db);
+  }
+
+  if (currentVersion < 9) {
+    await upgradeQuestionFingerprintSchemaV9(db);
   }
 
   await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION};`);
@@ -229,15 +233,13 @@ export async function annotateImportPreviewDuplicates(
   if (importFingerprints.length === 0) {
     return {
       ...preview,
-      duplicateSummary: {
+      duplicateSummary: createImportDuplicateSummary({
         sameNameBankCount,
         sameFileNameBankCount,
         duplicateRowsInFile: stats.duplicateRowsInFile,
         matchedExistingQuestionCount: 0,
         importableQuestionCount: importableRows.length,
-        exactMatchedBank: null,
-        matchedBanks: [],
-      },
+      }),
     };
   }
 
@@ -318,15 +320,14 @@ export async function annotateImportPreviewDuplicates(
 
   return {
     ...preview,
-    duplicateSummary: {
+    duplicateSummary: createImportDuplicateSummary({
       sameNameBankCount,
       sameFileNameBankCount,
       duplicateRowsInFile: stats.duplicateRowsInFile,
       matchedExistingQuestionCount: matchedFingerprintSet.size,
       importableQuestionCount: importableRows.length,
-      exactMatchedBank: matchedBanks.find((bank) => bank.isExactMatch) ?? null,
       matchedBanks,
-    },
+    }),
   };
 }
 
@@ -1365,6 +1366,27 @@ function safeParseQuestionTypes(value: string): QuestionType[] {
   }
 }
 
+function createImportDuplicateSummary(input: {
+  sameNameBankCount: number;
+  sameFileNameBankCount: number;
+  duplicateRowsInFile: number;
+  matchedExistingQuestionCount: number;
+  importableQuestionCount: number;
+  matchedBanks?: ImportDuplicateBankMatch[];
+}) {
+  const matchedBanks = input.matchedBanks ?? [];
+
+  return {
+    sameNameBankCount: input.sameNameBankCount,
+    sameFileNameBankCount: input.sameFileNameBankCount,
+    duplicateRowsInFile: input.duplicateRowsInFile,
+    matchedExistingQuestionCount: input.matchedExistingQuestionCount,
+    importableQuestionCount: input.importableQuestionCount,
+    exactMatchedBank: matchedBanks.find((bank) => bank.isExactMatch) ?? null,
+    matchedBanks,
+  };
+}
+
 function safeParseJson<T>(value: string, fallback: T): T {
   try {
     return JSON.parse(value) as T;
@@ -1682,7 +1704,11 @@ async function upgradeQuestionFingerprintSchemaV8(db: SQLiteDatabase) {
       ON questions(bank_id, question_fingerprint);
   `);
 
-  await backfillExistingQuestionFingerprints(db);
+  await syncQuestionFingerprints(db, 'empty_only');
+}
+
+async function upgradeQuestionFingerprintSchemaV9(db: SQLiteDatabase) {
+  await syncQuestionFingerprints(db, 'all');
 }
 
 async function backfillMissingSessionItems(
@@ -1735,9 +1761,15 @@ async function backfillMissingSessionItems(
   }
 }
 
-async function backfillExistingQuestionFingerprints(db: SQLiteDatabase) {
+async function syncQuestionFingerprints(
+  db: SQLiteDatabase,
+  mode: 'empty_only' | 'all',
+) {
   const rows = await db.getAllAsync<
-    Pick<QuestionRow, 'id' | 'type' | 'stem' | 'options_json' | 'answers_json' | 'question_fingerprint'>
+    Pick<
+      QuestionRow,
+      'id' | 'type' | 'stem' | 'options_json' | 'answers_json' | 'explanation'
+    >
   >(
     `
       SELECT
@@ -1746,9 +1778,9 @@ async function backfillExistingQuestionFingerprints(db: SQLiteDatabase) {
         stem,
         options_json,
         answers_json,
-        question_fingerprint
+        explanation
       FROM questions
-      WHERE question_fingerprint = ''
+      ${mode === 'empty_only' ? `WHERE question_fingerprint = ''` : ''}
     `,
   );
 
@@ -1770,6 +1802,7 @@ async function backfillExistingQuestionFingerprints(db: SQLiteDatabase) {
           stem: row.stem,
           options: safeParseJson<QuestionOption[]>(row.options_json, []),
           answers: safeParseJson<string[]>(row.answers_json, []),
+          explanation: row.explanation,
         }) ?? '';
 
       await statement.executeAsync({

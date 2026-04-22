@@ -9,7 +9,10 @@ import {
   saveImportPreview,
 } from './src/db/quizDb';
 import { useAndroidBackHandler } from './src/hooks/useAndroidBackHandler';
-import { pickAndParseLocalExcelBatch } from './src/importer/localExcelImport';
+import {
+  pickAndParseLocalExcelBatch,
+  pickAndParseWeChatExcelBatch,
+} from './src/importer/localExcelImport';
 import { BankDetailScreen } from './src/screens/BankDetailScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ImportPreviewScreen } from './src/screens/ImportPreviewScreen';
@@ -17,7 +20,7 @@ import { QuizModeScreen } from './src/screens/QuizModeScreen';
 import { ReciteModeScreen } from './src/screens/ReciteModeScreen';
 import { WrongBookScreen } from './src/screens/WrongBookScreen';
 import { colors, radius, spacing } from './src/theme';
-import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
+import type { BankSource, ImportPreview, QuestionBank, StudyTab } from './src/types';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
 
 export default function App() {
@@ -90,11 +93,14 @@ function AppShell() {
     [activeTab, busyLabel, preview, selectedBank],
   );
 
-  const handleImportLocal = async () => {
-    setBusyLabel('正在读取本地 Excel...');
+  const handleImportBySource = async (source: BankSource) => {
+    setBusyLabel(source === '微信 Excel' ? '正在读取微信 Excel...' : '正在读取本地 Excel...');
 
     try {
-      const batchResult = await pickAndParseLocalExcelBatch();
+      const batchResult =
+        source === '微信 Excel'
+          ? await pickAndParseWeChatExcelBatch()
+          : await pickAndParseLocalExcelBatch();
 
       if (!batchResult) {
         return;
@@ -115,7 +121,11 @@ function AppShell() {
 
       if (batchResult.failures.length > 0) {
         Alert.alert(
-          nextQueue.length > 0 ? '部分文件未加入导入队列' : '导入失败',
+          nextQueue.length > 0
+            ? source === '微信 Excel'
+              ? '部分微信文件未加入导入队列'
+              : '部分文件未加入导入队列'
+            : '导入失败',
           formatBatchFailures(batchResult.failures),
         );
       }
@@ -126,6 +136,39 @@ function AppShell() {
     } finally {
       setBusyLabel(null);
     }
+  };
+
+  const handleImportLocal = async () => {
+    await handleImportBySource('本地 Excel');
+  };
+
+  const handleImportWechat = async () => {
+    await handleImportBySource('微信 Excel');
+  };
+
+  const handleRepickImport = () => {
+    if (!preview) {
+      void handleImportLocal();
+      return;
+    }
+
+    Alert.alert(
+      preview.source === '微信 Excel' ? '重新从微信选择文件' : '重新选择文件',
+      '重新选择后会替换当前导入队列，尚未导入的文件不会保留。',
+      [
+        {
+          text: '继续当前队列',
+          style: 'cancel',
+        },
+        {
+          text: '重新选择',
+          style: 'destructive',
+          onPress: () => {
+            void handleImportBySource(preview.source);
+          },
+        },
+      ],
+    );
   };
 
   const handleConfirmImport = async () => {
@@ -256,7 +299,7 @@ function AppShell() {
               currentIndex={(importBatchProgress?.imported ?? 0) + (importBatchProgress?.skipped ?? 0) + 1}
               totalCount={importBatchProgress?.total ?? importQueue.length}
               onConfirm={handleConfirmImport}
-              onRepick={handleImportLocal}
+              onRepick={handleRepickImport}
               onSkipCurrent={handleSkipCurrentPreview}
               onCancelBatch={clearImportQueue}
             />
@@ -271,6 +314,7 @@ function AppShell() {
                 onOpenTab={handleChangeTab}
                 onOpenBankDetail={setSelectedBank}
                 onImportLocal={handleImportLocal}
+                onImportWechat={handleImportWechat}
               />
             )
           ) : activeTab === 'quiz' ? (
@@ -305,10 +349,16 @@ function formatBatchFailures(
     message: string;
   }[],
 ) {
-  return failures
+  const visibleFailures = failures
     .slice(0, 3)
     .map((failure) => `${failure.fileName}：${failure.message}`)
     .join('\n');
+
+  if (failures.length <= 3) {
+    return visibleFailures;
+  }
+
+  return `${visibleFailures}\n还有 ${failures.length - 3} 个文件未展开。`;
 }
 
 const styles = StyleSheet.create({

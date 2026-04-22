@@ -1,4 +1,4 @@
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ModeCard } from '../components/ModeCard';
 import { SectionTitle } from '../components/SectionTitle';
@@ -13,6 +13,7 @@ type HomeScreenProps = {
   onOpenTab: (tab: StudyTab) => void;
   onOpenBankDetail: (bank: QuestionBank) => void;
   onImportLocal: () => void;
+  onImportWechat: () => void;
 };
 
 export function HomeScreen({
@@ -22,6 +23,7 @@ export function HomeScreen({
   onOpenTab,
   onOpenBankDetail,
   onImportLocal,
+  onImportWechat,
 }: HomeScreenProps) {
   const handleImport = (source: 'local' | 'wechat') => {
     if (source === 'local') {
@@ -29,10 +31,7 @@ export function HomeScreen({
       return;
     }
 
-    Alert.alert(
-      '微信 Excel 导入',
-      '这一轮先完成本地 Excel -> 预览 -> SQLite 的完整链路，微信导入后续再接。',
-    );
+    onImportWechat();
   };
 
   return (
@@ -40,14 +39,14 @@ export function HomeScreen({
       <SectionTitle
         eyebrow="QuizX MVP"
         title="把题库装进口袋里"
-        subtitle="当前版本已经开始接真实数据流：本地 Excel 支持批量选择，先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
+        subtitle="当前版本已经开始接真实数据流：本地 Excel 和微信 Excel 都支持批量选择，先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
       />
 
       <View style={styles.heroCard}>
         <View style={styles.heroText}>
           <Text style={styles.heroTitle}>先导入，再落 SQLite</Text>
           <Text style={styles.heroDescription}>
-            系统会把 Excel 行数据统一映射成标准题目结构，支持一次选择多个文件，并在预览阶段提示同名题库、同名文件和内容重复情况。
+            系统会把 Excel 行数据统一映射成标准题目结构，支持从系统文件或微信导出的 Excel 中批量选择文件，并在预览阶段提示同名题库、同名文件和内容重复情况。
           </Text>
         </View>
         <View style={styles.heroActions}>
@@ -157,13 +156,14 @@ export function HomeScreen({
         <Text style={styles.tipText}>3. 题库名默认取 Excel 文件名</Text>
         <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
         <Text style={styles.tipText}>5. 同名文件只作提示，是否重复以题目内容为准</Text>
+        <Text style={styles.tipText}>6. 微信导入同样要求使用这套标准模板</Text>
       </View>
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 增加重复导入处理与批量导入体验</Text>
-        <Text style={styles.tipText}>2. 后续再补微信来源和复习算法</Text>
-        <Text style={styles.tipText}>3. 继续完善题库检索与筛选能力</Text>
+        <Text style={styles.tipText}>1. 再补复习算法和错题恢复策略</Text>
+        <Text style={styles.tipText}>2. 继续完善题库检索与筛选能力</Text>
+        <Text style={styles.tipText}>3. 后续再评估更深的微信分享直达能力</Text>
       </View>
     </ScrollView>
   );
