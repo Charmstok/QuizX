@@ -2,7 +2,7 @@ export type StudyTab = 'home' | 'quiz' | 'recite' | 'wrong';
 
 export type QuestionType = '判断' | '单选' | '多选' | '填空';
 
-export type BankSource = '本地 Excel' | '微信 Excel';
+export type BankSource = '本地 Excel' | '微信 Excel' | '应用分享';
 
 export type QuestionOption = {
   key: string;

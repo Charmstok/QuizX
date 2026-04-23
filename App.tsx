@@ -1,5 +1,5 @@
 import { ActivityIndicator, Alert, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { TabBar } from './src/components/TabBar';
 import {
@@ -11,7 +11,7 @@ import {
 import { useAndroidBackHandler } from './src/hooks/useAndroidBackHandler';
 import {
   pickAndParseLocalExcelBatch,
-  pickAndParseWeChatExcelBatch,
+  parseSharedExcelBatch,
 } from './src/importer/localExcelImport';
 import { BankDetailScreen } from './src/screens/BankDetailScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
@@ -20,7 +20,9 @@ import { QuizModeScreen } from './src/screens/QuizModeScreen';
 import { ReciteModeScreen } from './src/screens/ReciteModeScreen';
 import { WrongBookScreen } from './src/screens/WrongBookScreen';
 import { colors, radius, spacing } from './src/theme';
-import type { BankSource, ImportPreview, QuestionBank, StudyTab } from './src/types';
+import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
+import type { ResolvedSharePayload } from './src/vendor/expoSharing';
+import { clearSharedPayloads, useIncomingShare } from './src/vendor/expoSharing';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
 
 export default function App() {
@@ -33,6 +35,11 @@ export default function App() {
 
 function AppShell() {
   const db = useSQLiteContext();
+  const {
+    resolvedSharedPayloads,
+    error: incomingShareError,
+    isResolving: isResolvingIncomingShare,
+  } = useIncomingShare();
   const [activeTab, setActiveTab] = useState<StudyTab>('home');
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
@@ -44,9 +51,11 @@ function AppShell() {
   } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
+  const handledShareKeyRef = useRef('');
 
   const preview = importQueue[0] ?? null;
   const totalQuestions = banks.reduce((sum, bank) => sum + bank.questionCount, 0);
+  const isImporting = Boolean(busyLabel) || isResolvingIncomingShare;
 
   const refreshBanks = async () => {
     setIsRefreshing(true);
@@ -66,9 +75,75 @@ function AppShell() {
     void refreshBanks();
   }, []);
 
+  useEffect(() => {
+    if (!incomingShareError) {
+      return;
+    }
+
+    const message = incomingShareError.message || '分享文件解析失败。';
+
+    Alert.alert('接收分享失败', message, [
+      {
+        text: '知道了',
+        onPress: () => {
+          clearSharedPayloads();
+        },
+      },
+    ]);
+  }, [incomingShareError]);
+
+  useEffect(() => {
+    if (isResolvingIncomingShare || resolvedSharedPayloads.length === 0 || busyLabel || isRefreshing) {
+      return;
+    }
+
+    const shareKey = createResolvedShareKey(resolvedSharedPayloads);
+
+    if (!shareKey || handledShareKeyRef.current === shareKey) {
+      return;
+    }
+
+    const markHandled = () => {
+      handledShareKeyRef.current = shareKey;
+    };
+
+    const dismissSharedImport = () => {
+      markHandled();
+      clearSharedPayloads();
+    };
+
+    const startSharedImport = () => {
+      markHandled();
+      void handleImportShared(resolvedSharedPayloads);
+    };
+
+    if (preview || importQueue.length > 0) {
+      Alert.alert(
+        '检测到新的分享文件',
+        '新的分享文件已经到达。继续后会替换当前导入队列；如果暂不替换，之后需要重新分享一次。',
+        [
+          {
+            text: '保留当前队列',
+            style: 'cancel',
+            onPress: dismissSharedImport,
+          },
+          {
+            text: '替换为新分享',
+            style: 'destructive',
+            onPress: startSharedImport,
+          },
+        ],
+        { cancelable: false },
+      );
+      return;
+    }
+
+    startSharedImport();
+  }, [busyLabel, importQueue.length, isRefreshing, isResolvingIncomingShare, preview, resolvedSharedPayloads]);
+
   useAndroidBackHandler(
     () => {
-      if (busyLabel) {
+      if (isImporting) {
         return true;
       }
 
@@ -90,45 +165,23 @@ function AppShell() {
 
       return false;
     },
-    [activeTab, busyLabel, preview, selectedBank],
+    [activeTab, isImporting, preview, selectedBank],
   );
 
-  const handleImportBySource = async (source: BankSource) => {
-    setBusyLabel(source === '微信 Excel' ? '正在读取微信 Excel...' : '正在读取本地 Excel...');
+  const handleImportLocal = async () => {
+    setBusyLabel('正在读取本地 Excel...');
 
     try {
-      const batchResult =
-        source === '微信 Excel'
-          ? await pickAndParseWeChatExcelBatch()
-          : await pickAndParseLocalExcelBatch();
+      const batchResult = await pickAndParseLocalExcelBatch();
 
       if (!batchResult) {
         return;
       }
 
-      const nextQueue = await hydrateImportQueue(batchResult.previews);
-
-      if (nextQueue.length > 0) {
-        setImportQueue(nextQueue);
-        setImportBatchProgress({
-          total: nextQueue.length,
-          imported: 0,
-          skipped: 0,
-        });
-        setActiveTab('home');
-        setSelectedBank(null);
-      }
-
-      if (batchResult.failures.length > 0) {
-        Alert.alert(
-          nextQueue.length > 0
-            ? source === '微信 Excel'
-              ? '部分微信文件未加入导入队列'
-              : '部分文件未加入导入队列'
-            : '导入失败',
-          formatBatchFailures(batchResult.failures),
-        );
-      }
+      await openImportQueue({
+        batchResult,
+        partialFailureTitle: '部分文件未加入导入队列',
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : '文件解析失败，请确认选择的是可读取的 Excel。';
@@ -138,22 +191,19 @@ function AppShell() {
     }
   };
 
-  const handleImportLocal = async () => {
-    await handleImportBySource('本地 Excel');
-  };
-
-  const handleImportWechat = async () => {
-    await handleImportBySource('微信 Excel');
-  };
-
   const handleRepickImport = () => {
     if (!preview) {
       void handleImportLocal();
       return;
     }
 
+    if (preview.source !== '本地 Excel') {
+      showShareGuide('重新分享当前文件');
+      return;
+    }
+
     Alert.alert(
-      preview.source === '微信 Excel' ? '重新从微信选择文件' : '重新选择文件',
+      '重新选择文件',
       '重新选择后会替换当前导入队列，尚未导入的文件不会保留。',
       [
         {
@@ -164,7 +214,7 @@ function AppShell() {
           text: '重新选择',
           style: 'destructive',
           onPress: () => {
-            void handleImportBySource(preview.source);
+            void handleImportLocal();
           },
         },
       ],
@@ -213,6 +263,25 @@ function AppShell() {
     setImportBatchProgress(null);
   }
 
+  async function handleImportShared(payloads: ResolvedSharePayload[]) {
+    setBusyLabel('正在读取分享文件...');
+
+    try {
+      const batchResult = await parseSharedExcelBatch(payloads);
+
+      await openImportQueue({
+        batchResult,
+        partialFailureTitle: '部分分享文件未加入导入队列',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '分享文件解析失败。';
+      Alert.alert('导入失败', message);
+    } finally {
+      clearSharedPayloads();
+      setBusyLabel(null);
+    }
+  }
+
   async function hydrateImportQueue(previews: ImportPreview[]) {
     const nextQueue: ImportPreview[] = [];
 
@@ -221,6 +290,53 @@ function AppShell() {
     }
 
     return nextQueue;
+  }
+
+  async function openImportQueue({
+    batchResult,
+    partialFailureTitle,
+  }: {
+    batchResult: {
+      previews: ImportPreview[];
+      failures: {
+        fileName: string;
+        message: string;
+      }[];
+    };
+    partialFailureTitle: string;
+  }) {
+    const nextQueue = await hydrateImportQueue(batchResult.previews);
+
+    if (nextQueue.length > 0) {
+      setImportQueue(nextQueue);
+      setImportBatchProgress({
+        total: nextQueue.length,
+        imported: 0,
+        skipped: 0,
+      });
+      setActiveTab('home');
+      setSelectedBank(null);
+    }
+
+    if (batchResult.failures.length > 0) {
+      Alert.alert(
+        nextQueue.length > 0 ? partialFailureTitle : '导入失败',
+        formatBatchFailures(batchResult.failures),
+      );
+    }
+  }
+
+  function showShareGuide(title = '微信分享到 QuizX') {
+    Alert.alert(
+      title,
+      [
+        '1. 在微信聊天、群文件或文件传输助手里打开 Excel 文件。',
+        '2. 选择“用其他应用打开”或“分享”。',
+        '3. 在系统分享面板里选择 QuizX。',
+        '4. 回到 QuizX 后会自动进入导入预览。',
+        '5. 如果当前已经有导入队列，新分享会先询问是否替换。',
+      ].join('\n'),
+    );
   }
 
   async function advanceImportQueue({
@@ -310,11 +426,10 @@ function AppShell() {
               <HomeScreen
                 banks={banks}
                 totalQuestions={totalQuestions}
-                isImporting={Boolean(busyLabel)}
+                isImporting={isImporting}
                 onOpenTab={handleChangeTab}
                 onOpenBankDetail={setSelectedBank}
                 onImportLocal={handleImportLocal}
-                onImportWechat={handleImportWechat}
               />
             )
           ) : activeTab === 'quiz' ? (
@@ -328,12 +443,12 @@ function AppShell() {
 
         {!preview ? <TabBar activeTab={activeTab} onChange={handleChangeTab} /> : null}
 
-        {busyLabel || isRefreshing ? (
+        {busyLabel || isRefreshing || isResolvingIncomingShare ? (
           <View style={styles.overlay}>
             <View style={styles.overlayCard}>
               <ActivityIndicator size="small" color={colors.brand} />
               <Text style={styles.overlayText}>
-                {busyLabel ?? '正在同步 SQLite 题库...'}
+                {busyLabel ?? (isResolvingIncomingShare ? '正在接收分享文件...' : '正在同步 SQLite 题库...')}
               </Text>
             </View>
           </View>
@@ -359,6 +474,16 @@ function formatBatchFailures(
   }
 
   return `${visibleFailures}\n还有 ${failures.length - 3} 个文件未展开。`;
+}
+
+function createResolvedShareKey(payloads: ResolvedSharePayload[]) {
+  return payloads
+    .map(
+      (payload) =>
+        `${payload.contentUri ?? payload.value}|${payload.originalName ?? ''}|${payload.contentSize ?? ''}`,
+    )
+    .sort()
+    .join('||');
 }
 
 const styles = StyleSheet.create({

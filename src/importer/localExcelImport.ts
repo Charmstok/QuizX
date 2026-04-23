@@ -1,5 +1,6 @@
 import {
   EXCEL_MIME_TYPES,
+  EXCEL_FILE_EXTENSIONS,
   OPTION_KEYS,
   STANDARD_IMPORT_COLUMNS,
   STANDARD_IMPORT_SHEETS,
@@ -15,11 +16,17 @@ import type {
 } from '../types';
 import { getDocumentAsync } from '../vendor/expoDocumentPicker';
 import { File } from '../vendor/expoFileSystem';
+import type { ResolvedSharePayload } from '../vendor/expoSharing';
 import { read, utils } from '../vendor/xlsx';
 import type { WorkBook } from '../vendor/xlsx';
 
 type RawSheetRow = Record<string, unknown>;
 type StandardField = (typeof STANDARD_IMPORT_COLUMNS)[number];
+type ImportAsset = {
+  name: string;
+  uri: string;
+  mimeType?: string | null;
+};
 
 const STANDARD_FIELD_SET = new Set(
   STANDARD_IMPORT_COLUMNS.map((value) => normalizeHeader(value)),
@@ -51,14 +58,6 @@ const JUDGEMENT_TRUE_VALUES = new Set(['a', '对', '是', '正确', '√', 'true
 const JUDGEMENT_FALSE_VALUES = new Set(['b', '错', '否', '错误', '×', 'false', '0', 'no']);
 
 export async function pickAndParseLocalExcelBatch(): Promise<ImportBatchResult | null> {
-  return pickAndParseExcelBatch('本地 Excel');
-}
-
-export async function pickAndParseWeChatExcelBatch(): Promise<ImportBatchResult | null> {
-  return pickAndParseExcelBatch('微信 Excel');
-}
-
-async function pickAndParseExcelBatch(source: BankSource): Promise<ImportBatchResult | null> {
   const result = await getDocumentAsync({
     type: EXCEL_MIME_TYPES as unknown as string[],
     multiple: true,
@@ -69,12 +68,77 @@ async function pickAndParseExcelBatch(source: BankSource): Promise<ImportBatchRe
     return null;
   }
 
+  return await parseExcelAssetBatch({
+    source: '本地 Excel',
+    assets: result.assets.map((asset) => ({
+      name: asset.name,
+      uri: asset.uri,
+      mimeType: asset.mimeType,
+    })),
+  });
+}
+
+export async function parseSharedExcelBatch(
+  payloads: ResolvedSharePayload[],
+): Promise<ImportBatchResult> {
+  const assets: ImportAsset[] = [];
+  const failures: ImportBatchResult['failures'] = [];
+
+  for (const payload of payloads) {
+    const fileName = payload.originalName ?? deriveFileNameFromUri(payload.contentUri ?? payload.value);
+
+    if (payload.contentType !== 'file' || !payload.contentUri) {
+      failures.push({
+        fileName,
+        message: '当前只支持通过系统分享导入 Excel / CSV 文件。',
+      });
+      continue;
+    }
+
+    if (
+      !isSupportedExcelAsset({
+        fileName,
+        mimeType: payload.contentMimeType ?? payload.mimeType ?? null,
+      })
+    ) {
+      failures.push({
+        fileName,
+        message: '不是支持的 Excel / CSV 文件，当前仅支持 .xlsx / .xls / .csv。',
+      });
+      continue;
+    }
+
+    assets.push({
+      name: fileName,
+      uri: payload.contentUri,
+      mimeType: payload.contentMimeType ?? payload.mimeType ?? null,
+    });
+  }
+
+  const parsedBatch = await parseExcelAssetBatch({
+    source: '应用分享',
+    assets,
+  });
+
+  return {
+    previews: parsedBatch.previews,
+    failures: [...failures, ...parsedBatch.failures],
+  };
+}
+
+async function parseExcelAssetBatch({
+  source,
+  assets,
+}: {
+  source: BankSource;
+  assets: ImportAsset[];
+}): Promise<ImportBatchResult> {
   const previews: ImportPreview[] = [];
   const failures: ImportBatchResult['failures'] = [];
 
-  for (const asset of result.assets) {
+  for (const asset of assets) {
     try {
-      const file = new File(asset);
+      const file = new File(asset.uri);
       const arrayBuffer = await file.arrayBuffer();
       const workbook = read(arrayBuffer, { type: 'array' });
 
@@ -97,6 +161,44 @@ async function pickAndParseExcelBatch(source: BankSource): Promise<ImportBatchRe
     previews,
     failures,
   };
+}
+
+function isSupportedExcelAsset({
+  fileName,
+  mimeType,
+}: {
+  fileName: string;
+  mimeType?: string | null;
+}) {
+  const lowerCaseName = fileName.toLowerCase();
+
+  if (EXCEL_FILE_EXTENSIONS.some((extension) => lowerCaseName.endsWith(extension))) {
+    return true;
+  }
+
+  if (!mimeType) {
+    return false;
+  }
+
+  return EXCEL_MIME_TYPES.includes(mimeType);
+}
+
+function deriveFileNameFromUri(uri: string | null) {
+  if (!uri) {
+    return '未命名文件';
+  }
+
+  const matched = uri.match(/[^/?#]+(?=$|[?#])/);
+
+  if (!matched) {
+    return '未命名文件';
+  }
+
+  try {
+    return decodeURIComponent(matched[0]);
+  } catch {
+    return matched[0];
+  }
 }
 
 export function buildImportPreview({

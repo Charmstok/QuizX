@@ -33,7 +33,7 @@ export function ImportPreviewScreen({
   const stats = getImportPreviewStats(preview);
   const visibleRows = preview.rows.slice(0, 8);
   const invalidRows = preview.rows.filter((row) => !isImportRowValid(row));
-  const isWeChatImport = preview.source === '微信 Excel';
+  const isSharedImport = preview.source === '应用分享' || preview.source === '微信 Excel';
   const hasExactDuplicate = Boolean(preview.duplicateSummary.exactMatchedBank);
   const hasMoreFiles = totalCount > 1;
   const canImport = stats.importableCount > 0 && stats.invalidCount === 0 && !isSaving;
@@ -51,10 +51,8 @@ export function ImportPreviewScreen({
     preview.duplicateSummary.sameFileNameBankCount > 0 ||
     preview.duplicateSummary.duplicateRowsInFile > 0 ||
     preview.duplicateSummary.matchedExistingQuestionCount > 0;
-  const repickLabel = isWeChatImport
-    ? hasMoreFiles
-      ? '重新从微信选择并重建队列'
-      : '重新从微信选择'
+  const repickLabel = isSharedImport
+    ? '查看重新分享步骤'
     : hasMoreFiles
       ? '重新选择并重建队列'
       : '重新选择文件';
@@ -76,11 +74,11 @@ export function ImportPreviewScreen({
         </View>
       ) : null}
 
-      {isWeChatImport ? (
+      {isSharedImport ? (
         <View style={[styles.panel, styles.wechatPanel]}>
-          <Text style={styles.wechatTitle}>微信导入说明</Text>
+          <Text style={styles.wechatTitle}>分享导入说明</Text>
           <Text style={styles.wechatText}>
-            当前流程适用于从微信聊天、群文件或文件传输助手中导出的 Excel。后续仍会按同一套标准模板校验并写入 SQLite。
+            当前文件来自系统分享入口，适合在微信聊天、群文件或文件传输助手中把 Excel 分享给 QuizX。收到文件后，系统仍会按同一套标准模板校验并写入 SQLite。
           </Text>
         </View>
       ) : null}

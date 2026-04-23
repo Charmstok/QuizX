@@ -15,4 +15,12 @@ export const EXCEL_MIME_TYPES = [
   'text/csv',
 ];
 
+export const EXCEL_SHARE_MIME_TYPES = [
+  ...EXCEL_MIME_TYPES,
+  'application/csv',
+  'application/octet-stream',
+];
+
+export const EXCEL_FILE_EXTENSIONS = ['.xlsx', '.xls', '.csv'] as const;
+
 export const OPTION_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'] as const;

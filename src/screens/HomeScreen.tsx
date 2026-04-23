@@ -13,7 +13,6 @@ type HomeScreenProps = {
   onOpenTab: (tab: StudyTab) => void;
   onOpenBankDetail: (bank: QuestionBank) => void;
   onImportLocal: () => void;
-  onImportWechat: () => void;
 };
 
 export function HomeScreen({
@@ -23,35 +22,25 @@ export function HomeScreen({
   onOpenTab,
   onOpenBankDetail,
   onImportLocal,
-  onImportWechat,
 }: HomeScreenProps) {
-  const handleImport = (source: 'local' | 'wechat') => {
-    if (source === 'local') {
-      onImportLocal();
-      return;
-    }
-
-    onImportWechat();
-  };
-
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionTitle
         eyebrow="QuizX MVP"
         title="把题库装进口袋里"
-        subtitle="当前版本已经开始接真实数据流：本地 Excel 和微信 Excel 都支持批量选择，先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
+        subtitle="当前版本已经开始接真实数据流：支持本地批量导入，也支持把微信里的 Excel 直接分享到 QuizX。系统会先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
       />
 
       <View style={styles.heroCard}>
         <View style={styles.heroText}>
           <Text style={styles.heroTitle}>先导入，再落 SQLite</Text>
           <Text style={styles.heroDescription}>
-            系统会把 Excel 行数据统一映射成标准题目结构，支持从系统文件或微信导出的 Excel 中批量选择文件，并在预览阶段提示同名题库、同名文件和内容重复情况。
+            系统会把 Excel 行数据统一映射成标准题目结构。你可以从系统文件选择器批量导入；如果文件在微信里，则直接把 Excel 分享给 QuizX，应用收到后会自动进入导入预览，并提示同名题库、同名文件和内容重复情况。
           </Text>
         </View>
         <View style={styles.heroActions}>
           <Pressable
-            onPress={() => handleImport('local')}
+            onPress={onImportLocal}
             disabled={isImporting}
             style={({ pressed }) => [
               styles.primaryAction,
@@ -62,16 +51,9 @@ export function HomeScreen({
               {isImporting ? '解析文件中...' : '导入本地 Excel'}
             </Text>
           </Pressable>
-          <Pressable
-            onPress={() => handleImport('wechat')}
-            disabled={isImporting}
-            style={({ pressed }) => [
-              styles.secondaryAction,
-              (pressed || isImporting) && styles.pressed,
-            ]}
-          >
-            <Text style={styles.secondaryActionText}>导入微信 Excel</Text>
-          </Pressable>
+          <Text style={styles.heroHint}>
+            微信文件无需在首页点按钮，直接从微信把 Excel 分享给 QuizX 即可自动导入。
+          </Text>
         </View>
       </View>
 
@@ -156,15 +138,16 @@ export function HomeScreen({
         <Text style={styles.tipText}>3. 题库名默认取 Excel 文件名</Text>
         <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
         <Text style={styles.tipText}>5. 同名文件只作提示，是否重复以题目内容为准</Text>
-        <Text style={styles.tipText}>6. 微信导入同样要求使用这套标准模板</Text>
-        <Text style={styles.tipText}>7. 旧格式无表头工作表也会按题型兼容解析</Text>
+        <Text style={styles.tipText}>6. 微信导入通过系统分享完成，不需要在首页手动点微信入口</Text>
+        <Text style={styles.tipText}>7. 分享导入与本地导入共用同一套解析规则</Text>
+        <Text style={styles.tipText}>8. 旧格式无表头工作表也会按题型兼容解析</Text>
       </View>
 
       <View style={styles.planCard}>
         <Text style={styles.tipTitle}>下一阶段接入计划</Text>
         <Text style={styles.tipText}>1. 再补复习算法和错题恢复策略</Text>
         <Text style={styles.tipText}>2. 继续完善题库检索与筛选能力</Text>
-        <Text style={styles.tipText}>3. 后续再评估更深的微信分享直达能力</Text>
+        <Text style={styles.tipText}>3. 后续再评估 iOS 分享扩展和更多文件来源</Text>
       </View>
     </ScrollView>
   );
@@ -212,18 +195,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
-  secondaryAction: {
-    backgroundColor: colors.background,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  secondaryActionText: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '700',
+  heroHint: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 20,
   },
   pressed: {
     opacity: 0.88,
