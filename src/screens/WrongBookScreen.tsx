@@ -338,7 +338,7 @@ export function WrongBookScreen() {
         ) : isRefreshingBanks ? (
           <View style={styles.emptyCard}>
             <Text style={styles.emptyTitle}>正在加载错题</Text>
-            <Text style={styles.emptyText}>正在从 SQLite 同步当前错题列表。</Text>
+            <Text style={styles.emptyText}>正在整理当前错题，请稍候。</Text>
           </View>
         ) : (
           <View style={styles.emptyCard}>

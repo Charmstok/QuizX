@@ -19,15 +19,15 @@ export function PlaceholderScreen({
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionTitle
-        eyebrow="模块预览"
+        eyebrow="使用提示"
         title={title}
         subtitle={description}
       />
 
       <View style={styles.panel}>
-        <Text style={styles.panelTitle}>这一页会在后续阶段补全</Text>
+        <Text style={styles.panelTitle}>这个页面暂时还没开放</Text>
         <Text style={styles.panelDescription}>
-          现在先用占位页确认导航和页面层次已经跑通，避免后面边做功能边返工结构。
+          你可以先回到首页导入题库，或使用已经开放的答题模式、背诵模式和错题本。
         </Text>
         <View style={styles.checklist}>
           {checklist.map((item) => (
@@ -40,8 +40,8 @@ export function PlaceholderScreen({
       </View>
 
       <View style={styles.noteCard}>
-        <Text style={styles.noteTitle}>当前阶段的目标</Text>
-        <Text style={styles.noteText}>先保证移动端最小界面稳定可运行，再接导入与数据库。</Text>
+        <Text style={styles.noteTitle}>现在可以怎么用</Text>
+        <Text style={styles.noteText}>建议先从首页导入 Excel，确认题目无误后，再开始学习。</Text>
       </View>
 
       <Pressable onPress={onBackHome} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
@@ -130,4 +130,3 @@ const styles = StyleSheet.create({
     opacity: 0.88,
   },
 });
-

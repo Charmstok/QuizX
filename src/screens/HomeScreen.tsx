@@ -26,16 +26,16 @@ export function HomeScreen({
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <SectionTitle
-        eyebrow="QuizX MVP"
+        eyebrow="QuizX"
         title="把题库装进口袋里"
-        subtitle="当前版本已经开始接真实数据流：支持本地批量导入，也支持把微信里的 Excel 直接分享到 QuizX。系统会先标准化预览，再顺序写入 SQLite。重复题库按题目内容识别，同名文件只做提示。题型先固定为判断、单选、多选、填空。"
+        subtitle="先导入题库，再开始答题、背诵和错题重做。你可以一次选择多个 Excel，也可以直接从微信把 Excel 分享给 QuizX。系统会先给你预览结果，确认无误后再导入。"
       />
 
       <View style={styles.heroCard}>
         <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>先导入，再落 SQLite</Text>
+          <Text style={styles.heroTitle}>3 步开始使用</Text>
           <Text style={styles.heroDescription}>
-            系统会把 Excel 行数据统一映射成标准题目结构。你可以从系统文件选择器批量导入；如果文件在微信里，则直接把 Excel 分享给 QuizX，应用收到后会自动进入导入预览，并提示同名题库、同名文件和内容重复情况。
+            1. 先选择一个或多个 Excel。2. 在预览页检查题型、答案和重复提示。3. 确认导入后，就可以在答题模式、背诵模式和错题本里直接使用。
           </Text>
         </View>
         <View style={styles.heroActions}>
@@ -48,41 +48,41 @@ export function HomeScreen({
             ]}
           >
             <Text style={styles.primaryActionText}>
-              {isImporting ? '解析文件中...' : '导入本地 Excel'}
+              {isImporting ? '正在准备文件...' : '导入本地 Excel'}
             </Text>
           </Pressable>
           <Text style={styles.heroHint}>
-            微信文件无需在首页点按钮，直接从微信把 Excel 分享给 QuizX 即可自动导入。
+            如果文件在微信里，不用先下载到首页。直接在微信里把 Excel 分享给 QuizX，即可自动进入导入预览。
           </Text>
         </View>
       </View>
 
       <View style={styles.statsRow}>
-        <StatCard label="题库数量" value={String(banks.length)} hint="题库摘要从 SQLite 读取" />
-        <StatCard label="题目总数" value={String(totalQuestions)} hint="导入成功后会实时更新" />
+        <StatCard label="题库数量" value={String(banks.length)} hint="已经导入的题库总数" />
+        <StatCard label="题目总数" value={String(totalQuestions)} hint="导入完成后会自动更新" />
       </View>
 
       <View style={styles.sectionGap}>
-        <SectionTitle title="学习入口" subtitle="答题模式、背诵模式和错题本都已经可用。" />
+        <SectionTitle title="学习入口" subtitle="导入完成后，可以从这里选择不同的学习方式。" />
       </View>
       <View style={styles.modeList}>
         <ModeCard
           title="答题模式"
-          description="现在可以选择题库、逐题作答、即时判分，并在完成一轮后把结果写入 SQLite。"
+          description="按顺序做题，提交后立即看到对错。做完一轮会自动保存结果，方便下次继续。"
           actionLabel="开始顺序练习"
           accent={colors.brand}
           onPress={() => onOpenTab('quiz')}
         />
         <ModeCard
           title="背诵模式"
-          description="现在会优先安排薄弱题，支持显示答案、掌握度标记和未完成进度恢复。"
+          description="先看题目，再显示答案，并用“会 / 模糊 / 不会”标记掌握情况。"
           actionLabel="开始背诵"
           accent={colors.success}
           onPress={() => onOpenTab('recite')}
         />
         <ModeCard
           title="错题本"
-          description="按题库集中重做错题，答对后会从错题本移出，答错则继续保留。"
+          description="集中重做之前答错的题，答对后会自动移出，方便反复巩固。"
           actionLabel="开始重做"
           accent={colors.warning}
           onPress={() => onOpenTab('wrong')}
@@ -92,7 +92,7 @@ export function HomeScreen({
       <View style={styles.sectionGap}>
         <SectionTitle
           title="题库概览"
-          subtitle="这里已经从 SQLite 读取题库摘要。点击任意题库卡片，可以进入详情页浏览题目。"
+          subtitle="这里会显示已经导入的题库。点开任意题库，可以先浏览题目和答案。"
         />
       </View>
       <View style={styles.bankList}>
@@ -123,31 +123,31 @@ export function HomeScreen({
           ))
         ) : (
           <View style={styles.emptyCard}>
-            <Text style={styles.emptyTitle}>SQLite 已初始化，但还没有题库</Text>
+            <Text style={styles.emptyTitle}>还没有题库</Text>
             <Text style={styles.emptyText}>
-              先从系统文件选择器选一个 Excel，进入预览页确认格式后再导入。
+              先导入一个 Excel。进入预览页后检查题目是否正确，再确认导入。
             </Text>
           </View>
         )}
       </View>
 
       <View style={styles.tipCard}>
-        <Text style={styles.tipTitle}>当前标准导入列</Text>
-        <Text style={styles.tipText}>1. 标准工作表：判断题 / 单选题 / 多选题 / 填空</Text>
-        <Text style={styles.tipText}>2. 标准表头：题干 / 选项 / 答案 / 难度 / 题型 / 试题解析</Text>
-        <Text style={styles.tipText}>3. 题库名默认取 Excel 文件名</Text>
-        <Text style={styles.tipText}>4. 选项列使用 # 分隔多个选项</Text>
-        <Text style={styles.tipText}>5. 同名文件只作提示，是否重复以题目内容为准</Text>
-        <Text style={styles.tipText}>6. 微信导入通过系统分享完成，不需要在首页手动点微信入口</Text>
-        <Text style={styles.tipText}>7. 分享导入与本地导入共用同一套解析规则</Text>
-        <Text style={styles.tipText}>8. 旧格式无表头工作表也会按题型兼容解析</Text>
+        <Text style={styles.tipTitle}>导入前先看</Text>
+        <Text style={styles.tipText}>1. 推荐使用 4 个工作表：判断题 / 单选题 / 多选题 / 填空</Text>
+        <Text style={styles.tipText}>2. 推荐列名：题干 / 选项 / 答案 / 难度 / 题型 / 试题解析</Text>
+        <Text style={styles.tipText}>3. 题库名称默认使用 Excel 文件名</Text>
+        <Text style={styles.tipText}>4. 多个选项写在同一格时，用 # 分隔</Text>
+        <Text style={styles.tipText}>5. 文件名相同只会提醒，不会直接判定为重复</Text>
+        <Text style={styles.tipText}>6. 是否重复，以题目内容是否相同为准</Text>
+        <Text style={styles.tipText}>7. 微信导入：在微信里把 Excel 直接分享给 QuizX</Text>
+        <Text style={styles.tipText}>8. 旧格式表格也会尽量兼容读取</Text>
       </View>
 
       <View style={styles.planCard}>
-        <Text style={styles.tipTitle}>下一阶段接入计划</Text>
-        <Text style={styles.tipText}>1. 再补复习算法和错题恢复策略</Text>
-        <Text style={styles.tipText}>2. 继续完善题库检索与筛选能力</Text>
-        <Text style={styles.tipText}>3. 后续再评估 iOS 分享扩展和更多文件来源</Text>
+        <Text style={styles.tipTitle}>微信导入这样做</Text>
+        <Text style={styles.tipText}>1. 在微信聊天、群文件或文件传输助手里找到 Excel</Text>
+        <Text style={styles.tipText}>2. 点击分享或“用其他应用打开”，选择 QuizX</Text>
+        <Text style={styles.tipText}>3. 回到 QuizX 后检查预览，确认无误再导入</Text>
       </View>
     </ScrollView>
   );

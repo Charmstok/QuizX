@@ -343,7 +343,7 @@ export async function saveImportPreview(
 
   if (preview.duplicateSummary.exactMatchedBank) {
     throw new Error(
-      `当前文件与题库“${preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，默认不再重复入库。`,
+      `当前文件与题库“${preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，这次不会重复导入。`,
     );
   }
 

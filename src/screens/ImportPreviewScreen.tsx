@@ -42,10 +42,10 @@ export function ImportPreviewScreen({
       ? '跳过这个重复文件'
       : '跳过并返回首页'
     : isSaving
-      ? '写入 SQLite 中...'
+      ? '正在导入题库...'
       : hasMoreFiles
         ? '导入当前并继续下一个'
-        : '确认导入到 SQLite';
+        : '确认导入';
   const shouldShowDuplicatePanel =
     preview.duplicateSummary.sameNameBankCount > 0 ||
     preview.duplicateSummary.sameFileNameBankCount > 0 ||
@@ -62,7 +62,7 @@ export function ImportPreviewScreen({
       <SectionTitle
         eyebrow="导入预览"
         title={preview.bankName}
-        subtitle={`文件 ${preview.fileName} 已按 ${preview.source} 流程完成解析。现在先确认标准化结果，再决定是否写入 SQLite。`}
+        subtitle={`文件 ${preview.fileName} 已准备好。请先检查题目、答案和重复提示，确认无误后再导入。`}
       />
 
       {totalCount > 1 ? (
@@ -78,7 +78,7 @@ export function ImportPreviewScreen({
         <View style={[styles.panel, styles.wechatPanel]}>
           <Text style={styles.wechatTitle}>分享导入说明</Text>
           <Text style={styles.wechatText}>
-            当前文件来自系统分享入口，适合在微信聊天、群文件或文件传输助手中把 Excel 分享给 QuizX。收到文件后，系统仍会按同一套标准模板校验并写入 SQLite。
+            当前文件来自分享。你可以在微信聊天、群文件或文件传输助手中，把 Excel 直接分享给 QuizX，收到后就会自动进入这个预览页。
           </Text>
         </View>
       ) : null}
@@ -103,7 +103,7 @@ export function ImportPreviewScreen({
 
         <View style={styles.metricRow}>
           <View style={[styles.metricCard, styles.metricCardSuccess]}>
-            <Text style={styles.metricLabel}>预计入库</Text>
+            <Text style={styles.metricLabel}>可导入</Text>
             <Text style={styles.metricValue}>{stats.importableCount}</Text>
           </View>
           <View style={[styles.metricCard, styles.metricCardDanger]}>
@@ -122,9 +122,9 @@ export function ImportPreviewScreen({
       </View>
 
       <View style={styles.panel}>
-        <Text style={styles.panelTitle}>统一导入格式</Text>
+        <Text style={styles.panelTitle}>建议使用的表格格式</Text>
         <Text style={styles.panelDescription}>
-          标准模板仍然是首选。当前同时兼容一类无表头旧格式工作表，会按工作表名称回退识别题型并解析题目。
+          推荐优先使用标准模板。旧格式表格也会尽量兼容；如果本次是按兼容方式读取，下面会给出提醒。
         </Text>
         <View style={styles.tagRow}>
           {preview.standardColumns.map((column) => (
@@ -166,7 +166,7 @@ export function ImportPreviewScreen({
           ) : null}
           {preview.duplicateSummary.duplicateRowsInFile > 0 ? (
             <Text style={styles.duplicateText}>
-              当前文件内检测到 {preview.duplicateSummary.duplicateRowsInFile} 道重复题，入库时只保留首条。
+              当前文件内检测到 {preview.duplicateSummary.duplicateRowsInFile} 道重复题，导入时只保留第一道。
             </Text>
           ) : null}
           {preview.duplicateSummary.matchedExistingQuestionCount > 0 ? (
@@ -176,12 +176,12 @@ export function ImportPreviewScreen({
           ) : null}
           {preview.duplicateSummary.exactMatchedBank ? (
             <Text style={styles.duplicateStrongText}>
-              当前文件与题库“{preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，默认跳过，不再重复入库。
+              当前文件与题库“{preview.duplicateSummary.exactMatchedBank.bankName}”内容完全一致，这次会直接跳过，不再重复导入。
             </Text>
           ) : null}
           {preview.duplicateSummary.matchedBanks.slice(0, 3).map((bank) => (
             <Text key={bank.bankId} style={styles.duplicateBankText}>
-              {bank.bankName} · 命中 {bank.matchedQuestionCount} / {preview.duplicateSummary.importableQuestionCount}
+              {bank.bankName} · 相同 {bank.matchedQuestionCount} / {preview.duplicateSummary.importableQuestionCount}
               {bank.isExactMatch ? ' · 完全一致' : ''}
             </Text>
           ))}
@@ -190,7 +190,7 @@ export function ImportPreviewScreen({
 
       {invalidRows.length > 0 ? (
         <View style={[styles.panel, styles.errorPanel]}>
-          <Text style={styles.errorTitle}>未通过校验的行</Text>
+          <Text style={styles.errorTitle}>这些题暂时不能导入</Text>
           {invalidRows.map((row) => (
             <View key={row.id} style={styles.issueRow}>
               <Text style={styles.issueLabel}>
@@ -209,7 +209,7 @@ export function ImportPreviewScreen({
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>题目预览</Text>
         <Text style={styles.panelDescription}>
-          这里只展开前 {visibleRows.length} 行，重点确认题型识别、选项拆分和答案映射是否正确。
+          这里只展示前 {visibleRows.length} 行，重点看看题型、选项、答案和解析是否对应正确。
         </Text>
 
         <View style={styles.previewList}>

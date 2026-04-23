@@ -262,13 +262,13 @@ export function buildImportPreview({
     }
 
     workbookWarnings.push(
-      `工作表“${sheetName}”未使用标准表头，已按兼容旧格式导入。建议后续迁移到标准模板。`,
+      `工作表“${sheetName}”未使用标准表头，已按兼容格式读取。建议下次优先使用标准模板。`,
     );
     rows.push(...legacyRows);
   }
 
   if (rows.length === 0) {
-    throw new Error('没有读取到题目数据。请确认 Excel 第一行是表头，并且后续行包含题目内容。');
+    throw new Error('没有读取到题目数据。请确认 Excel 中有题目内容；如果使用标准模板，请把表头放在第一行。');
   }
 
   const bankName = stripExtension(fileName);
@@ -875,7 +875,7 @@ function applyInFileDuplicateWarnings(rows: ImportQuestionRow[]) {
     }
 
     row.warnings.push(
-      `与 ${firstRow.sheetName} 第 ${firstRow.rowNumber} 行题目重复，入库时只保留首条。`,
+      `与 ${firstRow.sheetName} 第 ${firstRow.rowNumber} 行题目重复，导入时只保留第一道。`,
     );
   }
 }

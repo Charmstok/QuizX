@@ -26,6 +26,8 @@ import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
 import type { ResolvedSharePayload } from './src/vendor/expoSharing';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
 
+const IMPORTING_BANK_LABEL = '正在导入题库...';
+
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -69,7 +71,7 @@ function AppShell() {
       const nextBanks = await listQuestionBanks(db);
       setBanks(nextBanks);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '读取 SQLite 失败。';
+      const message = error instanceof Error ? error.message : '暂时没能读取题库，请稍后再试。';
       Alert.alert('读取题库失败', message);
     } finally {
       setIsRefreshing(false);
@@ -85,10 +87,9 @@ function AppShell() {
       return;
     }
 
-    const message =
-      sharedPayloads.length > 0
-        ? '收到分享入口，但系统在读取分享数据时失败。高概率原因是当前分享文件 URI 解析异常。'
-        : incomingShareError.message || '分享文件解析失败。';
+    const message = sharedPayloads.length > 0
+      ? '没有成功接收到分享的文件。请回到微信或文件应用，再把 Excel 分享给 QuizX 一次。'
+      : '没有成功读取分享的文件，请重新分享一次。';
 
     Alert.alert('接收分享失败', message, [
       {
@@ -129,7 +130,7 @@ function AppShell() {
     if (preview || importQueue.length > 0) {
       Alert.alert(
         '检测到新的分享文件',
-        '新的分享文件已经到达。继续后会替换当前导入队列；如果暂不替换，之后需要重新分享一次。',
+        '新分享的文件已经到达。继续后会替换当前待导入文件；如果现在不替换，之后需要重新分享一次。',
         [
           {
             text: '保留当前队列',
@@ -178,7 +179,7 @@ function AppShell() {
   );
 
   const handleImportLocal = async () => {
-    setBusyLabel('正在读取本地 Excel...');
+    setBusyLabel('正在读取文件...');
 
     try {
       const batchResult = await pickAndParseLocalExcelBatch();
@@ -210,7 +211,7 @@ function AppShell() {
       Alert.alert(
         '重新分享当前文件',
         [
-          '当前文件来自系统分享入口，不能在应用内重新选择。',
+          '当前文件来自分享，不能在应用内重新选择。',
           '如需替换，请回到微信或其他应用，再把 Excel 重新分享给 QuizX。',
         ].join('\n'),
       );
@@ -246,7 +247,7 @@ function AppShell() {
       return;
     }
 
-    setBusyLabel('正在写入 SQLite...');
+    setBusyLabel(IMPORTING_BANK_LABEL);
 
     try {
       const savedBank = await saveImportPreview(db, preview);
@@ -258,7 +259,7 @@ function AppShell() {
         importedQuestionCount: savedBank.questionCount,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : '题库写入失败。';
+      const message = error instanceof Error ? error.message : '导入没有完成，请稍后再试。';
       Alert.alert('导入失败', message);
     } finally {
       setBusyLabel(null);
@@ -279,7 +280,7 @@ function AppShell() {
   }
 
   async function handleImportShared(payloads: ResolvedSharePayload[]) {
-    setBusyLabel('正在读取分享文件...');
+    setBusyLabel('正在接收分享文件...');
 
     try {
       const batchResult = await parseSharedExcelBatch(payloads);
@@ -382,15 +383,15 @@ function AppShell() {
     }
 
     if (importedBankName && importedQuestionCount !== undefined) {
-      Alert.alert('导入完成', `题库“${importedBankName}”已写入 SQLite，共 ${importedQuestionCount} 题。`);
+      Alert.alert('导入完成', `题库“${importedBankName}”已导入，共 ${importedQuestionCount} 题。`);
       return;
     }
 
     Alert.alert(
       skipReason === 'duplicate' ? '已跳过重复文件' : '已跳过当前文件',
       skipReason === 'duplicate'
-        ? '当前文件与已有题库内容完全一致，默认没有再次入库。'
-        : '当前文件没有写入 SQLite，已返回题库首页。',
+        ? '当前文件与已有题库内容完全一致，这次没有重复导入。'
+        : '当前文件未导入，已返回首页。',
     );
   }
 
@@ -414,7 +415,7 @@ function AppShell() {
           {preview ? (
             <ImportPreviewScreen
               preview={preview}
-              isSaving={busyLabel === '正在写入 SQLite...'}
+              isSaving={busyLabel === IMPORTING_BANK_LABEL}
               currentIndex={(importBatchProgress?.imported ?? 0) + (importBatchProgress?.skipped ?? 0) + 1}
               totalCount={importBatchProgress?.total ?? importQueue.length}
               onConfirm={handleConfirmImport}
@@ -451,7 +452,7 @@ function AppShell() {
             <View style={styles.overlayCard}>
               <ActivityIndicator size="small" color={colors.brand} />
               <Text style={styles.overlayText}>
-                {busyLabel ?? (isResolvingIncomingShare ? '正在接收分享文件...' : '正在同步 SQLite 题库...')}
+                {busyLabel ?? (isResolvingIncomingShare ? '正在接收分享文件...' : '正在整理题库...')}
               </Text>
             </View>
           </View>
