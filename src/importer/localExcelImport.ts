@@ -87,7 +87,7 @@ export async function parseSharedExcelBatch(
   for (const payload of payloads) {
     const fileName = payload.originalName ?? deriveFileNameFromUri(payload.contentUri ?? payload.value);
 
-    if (payload.contentType !== 'file' || !payload.contentUri) {
+    if (!payload.contentUri) {
       failures.push({
         fileName,
         message: '当前只支持通过系统分享导入 Excel / CSV 文件。',

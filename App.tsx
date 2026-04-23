@@ -1,5 +1,6 @@
-import { ActivityIndicator, Alert, SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { TabBar } from './src/components/TabBar';
 import {
@@ -8,6 +9,7 @@ import {
   migrateDbIfNeeded,
   saveImportPreview,
 } from './src/db/quizDb';
+import { useSafeIncomingShare } from './src/hooks/useSafeIncomingShare';
 import { useAndroidBackHandler } from './src/hooks/useAndroidBackHandler';
 import {
   pickAndParseLocalExcelBatch,
@@ -22,24 +24,27 @@ import { WrongBookScreen } from './src/screens/WrongBookScreen';
 import { colors, radius, spacing } from './src/theme';
 import type { ImportPreview, QuestionBank, StudyTab } from './src/types';
 import type { ResolvedSharePayload } from './src/vendor/expoSharing';
-import { clearSharedPayloads, useIncomingShare } from './src/vendor/expoSharing';
 import { SQLiteProvider, useSQLiteContext } from './src/vendor/expoSqlite';
 
 export default function App() {
   return (
-    <SQLiteProvider databaseName="quizx.db" onInit={migrateDbIfNeeded}>
-      <AppShell />
-    </SQLiteProvider>
+    <SafeAreaProvider>
+      <SQLiteProvider databaseName="quizx.db" onInit={migrateDbIfNeeded}>
+        <AppShell />
+      </SQLiteProvider>
+    </SafeAreaProvider>
   );
 }
 
 function AppShell() {
   const db = useSQLiteContext();
   const {
+    sharedPayloads,
     resolvedSharedPayloads,
+    clearSharedPayloads,
     error: incomingShareError,
     isResolving: isResolvingIncomingShare,
-  } = useIncomingShare();
+  } = useSafeIncomingShare();
   const [activeTab, setActiveTab] = useState<StudyTab>('home');
   const [banks, setBanks] = useState<QuestionBank[]>([]);
   const [selectedBank, setSelectedBank] = useState<QuestionBank | null>(null);
@@ -80,7 +85,10 @@ function AppShell() {
       return;
     }
 
-    const message = incomingShareError.message || '分享文件解析失败。';
+    const message =
+      sharedPayloads.length > 0
+        ? '收到分享入口，但系统在读取分享数据时失败。高概率原因是当前分享文件 URI 解析异常。'
+        : incomingShareError.message || '分享文件解析失败。';
 
     Alert.alert('接收分享失败', message, [
       {
@@ -90,7 +98,7 @@ function AppShell() {
         },
       },
     ]);
-  }, [incomingShareError]);
+  }, [incomingShareError, sharedPayloads.length]);
 
   useEffect(() => {
     if (isResolvingIncomingShare || resolvedSharedPayloads.length === 0 || busyLabel || isRefreshing) {
@@ -110,6 +118,7 @@ function AppShell() {
     const dismissSharedImport = () => {
       markHandled();
       clearSharedPayloads();
+      handledShareKeyRef.current = '';
     };
 
     const startSharedImport = () => {
@@ -198,7 +207,13 @@ function AppShell() {
     }
 
     if (preview.source !== '本地 Excel') {
-      showShareGuide('重新分享当前文件');
+      Alert.alert(
+        '重新分享当前文件',
+        [
+          '当前文件来自系统分享入口，不能在应用内重新选择。',
+          '如需替换，请回到微信或其他应用，再把 Excel 重新分享给 QuizX。',
+        ].join('\n'),
+      );
       return;
     }
 
@@ -278,6 +293,7 @@ function AppShell() {
       Alert.alert('导入失败', message);
     } finally {
       clearSharedPayloads();
+      handledShareKeyRef.current = '';
       setBusyLabel(null);
     }
   }
@@ -324,19 +340,6 @@ function AppShell() {
         formatBatchFailures(batchResult.failures),
       );
     }
-  }
-
-  function showShareGuide(title = '微信分享到 QuizX') {
-    Alert.alert(
-      title,
-      [
-        '1. 在微信聊天、群文件或文件传输助手里打开 Excel 文件。',
-        '2. 选择“用其他应用打开”或“分享”。',
-        '3. 在系统分享面板里选择 QuizX。',
-        '4. 回到 QuizX 后会自动进入导入预览。',
-        '5. 如果当前已经有导入队列，新分享会先询问是否替换。',
-      ].join('\n'),
-    );
   }
 
   async function advanceImportQueue({
@@ -404,7 +407,7 @@ function AppShell() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
       <View style={styles.container}>
         <View style={styles.content}>

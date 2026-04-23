@@ -1,0 +1,4 @@
+<resources>
+  <string name="app_name">QuizX</string>
+  <string name="share_into_scheme" translatable="false">quizx</string>
+</resources>

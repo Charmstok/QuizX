@@ -1,5 +1,6 @@
 export {
   clearSharedPayloads,
-  useIncomingShare,
+  getResolvedSharedPayloadsAsync,
+  getSharedPayloads,
 } from 'expo-sharing';
-export type { ResolvedSharePayload } from 'expo-sharing';
+export type { ResolvedSharePayload, SharePayload } from 'expo-sharing';
